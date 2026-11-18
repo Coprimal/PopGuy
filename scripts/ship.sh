@@ -93,7 +93,9 @@ on_exit() {
   [[ "$status" != 0 && -n "$stage" ]] || return 0
   echo >&2
   if [[ "$stage" == published ]]; then
-    echo "error: $TAG is published, but the appcast was not. Fix the issue, then re-run:" >&2
+    echo "error: $TAG is published, but the appcast step did not finish (appcast commit/push," >&2
+    echo "       old-feed mirror sync, Pages deploy or feed check). Fix the issue, then re-run" >&2
+    echo "       (safe to re-run):" >&2
     echo "         scripts/publish-appcast.sh $ZIP" >&2
     echo "       or undo the whole release:" >&2
     echo "         gh release delete $TAG --yes && git push origin :refs/tags/$TAG && git tag -d $TAG" >&2
@@ -136,6 +138,6 @@ stage=""
 echo
 echo "========================================"
 echo "  PopGuy v$VERSION shipped!"
-echo "  GitHub : https://github.com/dinhanhthi/PopGuy/releases/tag/v$VERSION"
-echo "  Appcast: https://dinhanhthi.github.io/PopGuy/appcast.xml (live in ~1 min)"
+echo "  GitHub : https://github.com/Coprimal/PopGuy/releases/tag/v$VERSION"
+echo "  Appcast: https://popguy.coprimal.dev/appcast.xml (old builds read it through the feed mirror)"
 echo "========================================"

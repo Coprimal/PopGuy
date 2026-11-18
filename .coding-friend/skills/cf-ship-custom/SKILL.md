@@ -269,10 +269,11 @@ No prompts. It runs, in order:
    Nothing is public until every asset is in place. It also writes the Sparkle notes file
    (macOS section only).
 6. `publish-appcast.sh` — generates the appcast, commits + pushes `appcast.xml` (the push
-   redeploys Pages, with the new version in the website header).
+   redeploys Pages, with the new version in the website header). It also syncs the old-feed
+   mirror (`scripts/sync-feed-mirror.sh`), then waits (up to 10 min) until
+   https://popguy.coprimal.dev/appcast.xml lists `/vX.Y.Z/`.
 
 If Keychain prompts appear during notarization or appcast signing, click **Always Allow**.
-Pages deploys within ~1 min after the appcast push. No manual steps needed.
 
 On a failure after the tag push, what to do depends on whether the release is already public:
 
@@ -285,19 +286,22 @@ On a failure after the tag push, what to do depends on whether the release is al
   printed `--clobber` upload. The `release: vX.Y.Z` commit stays on `main`; a later `ship.sh`
   run tags it again.
 - **After `publish-release.sh` has published it** (`ship.sh` says the release is published but
-  the appcast was not): the macOS zip and DMG, the Windows installers and the Velopack feed are
-  already public. The only automatic action is **one** re-run of
-  `scripts/publish-appcast.sh build/export/PopGuy-X.Y.Z.zip`; if it fails again, stop and
-  report. **Never delete a published release or its tag**, even though `ship.sh` also prints
-  the full undo: that one is for a human deciding to pull a bad release.
+  the appcast step did not finish: appcast commit/push, old-feed mirror sync, Pages deploy or
+  feed check): the macOS zip and DMG, the Windows installers and the Velopack feed are already
+  public. The only automatic action is **one** re-run of
+  `scripts/publish-appcast.sh build/export/PopGuy-X.Y.Z.zip` (safe to re-run: it commits only
+  when `appcast.xml` changed, retries the push and the mirror sync, and waits for the live
+  feed again); if it fails again, stop and report the error it prints.
+  **Never delete a published release or its tag**, even though `ship.sh` also prints the full
+  undo: that one is for a human deciding to pull a bad release.
 
 ### Step A2: Print summary
 
 ```
 Shipped PopGuy vX.Y.Z — one release, Latest:
-  https://github.com/dinhanhthi/PopGuy/releases/tag/vX.Y.Z
+  https://github.com/Coprimal/PopGuy/releases/tag/vX.Y.Z
   macOS   — notarized zip + DMG (or: no changes, ships with the Windows update)
-            Appcast: https://dinhanhthi.github.io/PopGuy/appcast.xml
+            Appcast: https://popguy.coprimal.dev/appcast.xml
   Windows — Setup.exe + Portable.zip for x64 and ARM64 (or: no changes, ships with the macOS update)
 ```
 

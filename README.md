@@ -6,11 +6,11 @@
 
 Select text in any app, get a floating toolbar to improve, translate or transform it with AI.
 
-[![Download macOS](https://img.shields.io/badge/Download-macOS-black?style=for-the-badge&logo=apple)](https://github.com/dinhanhthi/PopGuy/releases/latest)
-[![Download Windows](https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows11)](https://github.com/dinhanhthi/PopGuy/releases/latest)
+[![Download macOS](https://img.shields.io/badge/Download-macOS-black?style=for-the-badge&logo=apple)](https://github.com/Coprimal/PopGuy/releases/latest)
+[![Download Windows](https://img.shields.io/badge/Download-Windows-0078D4?style=for-the-badge&logo=windows11)](https://github.com/Coprimal/PopGuy/releases/latest)
 [![License: AGPL v3](https://img.shields.io/badge/License-AGPL%20v3-blue?style=for-the-badge)](LICENSE)
 
-[Website](https://pg.dinhanhthi.com) · [Demo video](https://www.youtube.com/watch?v=-ctYYSC4bWM)
+[Website](https://popguy.coprimal.dev) · [Demo video](https://www.youtube.com/watch?v=-ctYYSC4bWM)
 
 </div>
 
@@ -35,7 +35,7 @@ Select text in any app, get a floating toolbar to improve, translate or transfor
 
 ## Install
 
-Download the latest build from the [Releases page](https://github.com/dinhanhthi/PopGuy/releases/latest). macOS builds are signed, notarized and update themselves. On Windows, use `PopGuy-win-<arch>-Setup.exe` (installs for your user only, updates itself) or the `Portable.zip`.
+Download the latest build from the [Releases page](https://github.com/Coprimal/PopGuy/releases/latest). macOS builds are signed, notarized and update themselves. On Windows, use `PopGuy-win-<arch>-Setup.exe` (installs for your user only, updates itself) or the `Portable.zip`.
 
 ## Build
 

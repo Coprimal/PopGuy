@@ -1,13 +1,14 @@
 name: Deploy Pages
 
-# One GitHub Pages site (custom domain https://pg.dinhanhthi.com) serves both:
+# One GitHub Pages site (custom domain https://popguy.coprimal.dev) serves both:
 #   - the website (website/, React + Vite), and
-#   - the Sparkle feed appcast.xml. Installed apps fetch
-#     https://dinhanhthi.github.io/PopGuy/appcast.xml (SUFeedURL), which GitHub 301s to
-#     https://pg.dinhanhthi.com/appcast.xml. Every deploy replaces the whole site, so both
-#     must always ship in the same artifact.
+#   - the Sparkle feed appcast.xml. New builds fetch https://popguy.coprimal.dev/appcast.xml
+#     (SUFeedURL). Builds <= 1.4.11 fetch https://dinhanhthi.github.io/PopGuy/appcast.xml,
+#     a mirror in dinhanhthi/dinhanhthi.github.io synced by scripts/sync-feed-mirror.sh.
+#     The old domain pg.dinhanhthi.com 301s here (Cloudflare). Every deploy replaces the
+#     whole site, so both must always ship in the same artifact.
 # Only website/dist and appcast.xml are published; docs/ and the app source never are.
-# Requires Settings → Pages → Source = "GitHub Actions" and custom domain pg.dinhanhthi.com.
+# Requires Settings → Pages → Source = "GitHub Actions" and custom domain popguy.coprimal.dev.
 
 on:
   push:

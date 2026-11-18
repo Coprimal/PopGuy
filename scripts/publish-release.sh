@@ -273,5 +273,5 @@ if [[ -n "$WINDOWS_DIR" ]]; then
 fi
 
 echo
-echo "Done. Published $TAG → https://github.com/dinhanhthi/PopGuy/releases/tag/$TAG"
+echo "Done. Published $TAG → https://github.com/Coprimal/PopGuy/releases/tag/$TAG"
 echo "Sparkle notes written to $NOTES_FILE (generate_appcast, §4, will embed them)."
