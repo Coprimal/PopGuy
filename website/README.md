@@ -23,10 +23,11 @@ macOS button to the release page, the Windows buttons to its `PopGuy-win-<arch>-
 
 ## Deploy
 
-GitHub Pages, custom domain `pg.dinhanhthi.com` (Cloudflare DNS, zone `dinhanhthi.com`: CNAME `pg`
-→ `dinhanhthi.github.io`, DNS only). `.github/workflows/deploy-pages.yml` builds this site on every push to `main` that
+GitHub Pages, custom domain `popguy.coprimal.dev` (Cloudflare DNS, zone `coprimal.dev`: CNAME `popguy`
+→ `coprimal.github.io`, DNS only). `.github/workflows/deploy-pages.yml` builds this site on every push to `main` that
 touches `website/` or `appcast.xml` (every release commits it), and publishes it together with the Sparkle feed
 `appcast.xml`: one Pages site serves both, so they always deploy in the same artifact.
+The old domain `pg.dinhanhthi.com` 301-redirects to it (Cloudflare redirect rule, see CONTRIBUTING.md "Old addresses").
 
 Pages has no rewrites, so the workflow copies `index.html` to `actions.html`, `docs.html`,
 `privacy.html` (one per route, served at `/actions`, `/docs`, `/privacy`) and `404.html`.

@@ -1,4 +1,4 @@
 User-agent: *
 Allow: /
 
-Sitemap: https://pg.dinhanhthi.com/sitemap.xml
+Sitemap: https://popguy.coprimal.dev/sitemap.xml

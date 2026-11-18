@@ -1,4 +1,4 @@
-import { WINDOWS_DOWNLOAD_ARM64, WINDOWS_DOWNLOAD_X64, WINDOWS_PORTABLE_ARM64, WINDOWS_PORTABLE_X64 } from "../constants";
+import { DOWNLOAD_URL, WINDOWS_DOWNLOAD_ARM64, WINDOWS_DOWNLOAD_X64, WINDOWS_PORTABLE_ARM64, WINDOWS_PORTABLE_X64 } from "../constants";
 
 export const docsSections = [
   "Installation",
@@ -21,7 +21,7 @@ export const docsContent = {
           "Open PopGuy."
         ],
         stepLinks: [
-          "https://github.com/dinhanhthi/PopGuy/releases/latest"
+          DOWNLOAD_URL
         ]
       },
       {
