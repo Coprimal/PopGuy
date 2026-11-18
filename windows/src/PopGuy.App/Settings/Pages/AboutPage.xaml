@@ -62,8 +62,8 @@
                                 Foreground="{ThemeResource TextFillColorSecondaryBrush}" />
                             <HyperlinkButton
                                 Padding="0"
-                                Content="github.com/dinhanhthi/PopGuy"
-                                NavigateUri="https://github.com/dinhanhthi/PopGuy" />
+                                Content="github.com/Coprimal/PopGuy"
+                                NavigateUri="https://github.com/Coprimal/PopGuy" />
                         </StackPanel>
                     </StackPanel>
                 </controls:SettingsCard>
@@ -85,7 +85,7 @@
                     <controls:SettingsCard.HeaderIcon>
                         <FontIcon Glyph="&#xE83D;" />
                     </controls:SettingsCard.HeaderIcon>
-                    <HyperlinkButton Content="How releases are built" NavigateUri="https://github.com/dinhanhthi/PopGuy/blob/main/.github/workflows/windows-release.yml" />
+                    <HyperlinkButton Content="How releases are built" NavigateUri="https://github.com/Coprimal/PopGuy/blob/main/.github/workflows/windows-release.yml" />
                 </controls:SettingsCard>
 
                 <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="Updates" />
@@ -110,16 +110,16 @@
                 <TextBlock Style="{StaticResource SectionHeaderStyle}" Text="Info" />
 
                 <controls:SettingsCard Header="Author">
-                    <HyperlinkButton Content="Anh-Thi DINH" NavigateUri="https://dinhanhthi.com" />
+                    <HyperlinkButton Content="Coprimal" NavigateUri="https://coprimal.dev" />
                 </controls:SettingsCard>
                 <controls:SettingsCard Header="Website">
-                    <HyperlinkButton Content="pg.dinhanhthi.com" NavigateUri="https://pg.dinhanhthi.com" />
+                    <HyperlinkButton Content="popguy.coprimal.dev" NavigateUri="https://popguy.coprimal.dev" />
                 </controls:SettingsCard>
                 <controls:SettingsCard Header="Contact">
-                    <HyperlinkButton Content="me@dinhanhthi.com" NavigateUri="mailto:me@dinhanhthi.com" />
+                    <HyperlinkButton Content="contact@coprimal.dev" NavigateUri="mailto:contact@coprimal.dev" />
                 </controls:SettingsCard>
                 <controls:SettingsCard Header="Discussions">
-                    <HyperlinkButton Content="GitHub Discussions" NavigateUri="https://github.com/dinhanhthi/PopGuy/discussions" />
+                    <HyperlinkButton Content="GitHub Discussions" NavigateUri="https://github.com/Coprimal/PopGuy/discussions" />
                 </controls:SettingsCard>
                 <controls:SettingsCard Description="The open source software PopGuy is built with, and its licenses." Header="Acknowledgements">
                     <HyperlinkButton x:Name="AcknowledgementsButton" Content="Third-party notices" />

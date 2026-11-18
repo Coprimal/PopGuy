@@ -20,7 +20,7 @@ internal enum UpdateState { Idle, Checking, Downloading, Ready, UpToDate, Failed
 /// </summary>
 internal sealed class UpdateService : IDisposable
 {
-    private const string RepoUrl = "https://github.com/dinhanhthi/PopGuy";
+    private const string RepoUrl = "https://github.com/Coprimal/PopGuy";
     private static readonly TimeSpan FirstCheckDelay = TimeSpan.FromSeconds(10);
     private static readonly TimeSpan CheckInterval = TimeSpan.FromDays(1);
 

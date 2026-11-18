@@ -16,7 +16,7 @@ public sealed class ReleaseSelectorTests
             "published_at": "2026-10-29T10:00:00Z",
             "assets": [ { "name": "PopGuy-1.4.0.zip" },
                         { "name": "releases.win-x64.json",
-                          "browser_download_url": "https://github.com/dinhanhthi/PopGuy/releases/download/v1.4.0/releases.win-x64.json" } ] },
+                          "browser_download_url": "https://github.com/Coprimal/PopGuy/releases/download/v1.4.0/releases.win-x64.json" } ] },
           { "tag_name": "v1.4.0-beta", "draft": false, "prerelease": true,
             "published_at": "2026-10-20T10:00:00Z", "assets": [ { "name": "releases.win-arm64.json" } ] },
           { "tag_name": "v1.3.2", "name": "PopGuy 1.3.2", "draft": false, "prerelease": false,

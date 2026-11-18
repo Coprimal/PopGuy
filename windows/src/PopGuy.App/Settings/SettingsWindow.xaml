@@ -224,8 +224,8 @@
                     <HyperlinkButton
                         Grid.Column="2"
                         Padding="4,2,4,2"
-                        NavigateUri="https://dinhanhthi.com">
-                        <TextBlock Style="{StaticResource SettingsCaptionTextBlockStyle}" Text="Anh-Thi DINH" />
+                        NavigateUri="https://coprimal.dev">
+                        <TextBlock Style="{StaticResource SettingsCaptionTextBlockStyle}" Text="Coprimal" />
                     </HyperlinkButton>
                     <TextBlock
                         Grid.Column="3"
@@ -236,7 +236,7 @@
                     <HyperlinkButton
                         Grid.Column="4"
                         Padding="4,2,4,2"
-                        NavigateUri="https://github.com/dinhanhthi/PopGuy">
+                        NavigateUri="https://github.com/Coprimal/PopGuy">
                         <StackPanel Orientation="Horizontal" Spacing="4">
                             <FontIcon FontSize="12" Glyph="&#xE943;" />
                             <TextBlock Style="{StaticResource SettingsCaptionTextBlockStyle}" Text="GitHub" />

@@ -24,11 +24,11 @@ struct AboutView: View {
 
     // MARK: - Static URLs
 
-    private static let websiteURL     = URL(string: "https://pg.dinhanhthi.com")!
-    private static let authorURL      = URL(string: "https://dinhanhthi.com")!
-    private static let emailURL       = URL(string: "mailto:me@dinhanhthi.com")!
-    private static let discussionsURL = URL(string: "https://github.com/dinhanhthi/PopGuy/discussions")!
-    private static let githubURL      = URL(string: "https://github.com/dinhanhthi/PopGuy")!
+    private static let websiteURL     = URL(string: "https://popguy.coprimal.dev")!
+    private static let authorURL      = URL(string: "https://coprimal.dev")!
+    private static let emailURL       = URL(string: "mailto:contact@coprimal.dev")!
+    private static let discussionsURL = URL(string: "https://github.com/Coprimal/PopGuy/discussions")!
+    private static let githubURL      = URL(string: "https://github.com/Coprimal/PopGuy")!
 
     // MARK: - Body
 
@@ -59,7 +59,7 @@ struct AboutView: View {
                     Text(versionLine)
                         .font(.callout)
                         .foregroundStyle(.secondary)
-                    Link("github.com/dinhanhthi/PopGuy", destination: Self.githubURL)
+                    Link("github.com/Coprimal/PopGuy", destination: Self.githubURL)
                         .font(.callout)
                 }
             }
@@ -124,13 +124,13 @@ struct AboutView: View {
         SettingsCard(title: "Info") {
             VStack(alignment: .leading, spacing: SettingsMetrics.contentSpacing) {
                 row(label: "Author") {
-                    Link("Anh-Thi DINH", destination: Self.authorURL)
+                    Link("Coprimal", destination: Self.authorURL)
                 }
                 row(label: "Website") {
-                    Link("pg.dinhanhthi.com", destination: Self.websiteURL)
+                    Link("popguy.coprimal.dev", destination: Self.websiteURL)
                 }
                 row(label: "Contact") {
-                    Link("me@dinhanhthi.com", destination: Self.emailURL)
+                    Link("contact@coprimal.dev", destination: Self.emailURL)
                 }
                 row(label: "Discussions") {
                     Link("GitHub Discussions", destination: Self.discussionsURL)

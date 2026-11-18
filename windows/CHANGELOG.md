@@ -9,6 +9,9 @@ Before 1.4.0 Windows had its own versions (0.1.0).
 
 ## [Unreleased]
 
+### Changed
+- PopGuy moved to the Coprimal organization: the project now lives at github.com/Coprimal/PopGuy and the website at popguy.coprimal.dev. About shows Coprimal, coprimal.dev and contact@coprimal.dev. Updates come from the Coprimal/PopGuy releases; older versions keep updating as before.
+
 ## [1.4.11] - 2026-11-11
 
 ### Added

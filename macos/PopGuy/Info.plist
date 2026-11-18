@@ -56,7 +56,7 @@
 		</dict>
 	</array>
 	<key>SUFeedURL</key>
-	<string>https://dinhanhthi.github.io/PopGuy/appcast.xml</string>
+	<string>https://popguy.coprimal.dev/appcast.xml</string>
 	<key>SUPublicEDKey</key>
 	<string>7Jsrv7O43J6OLST/qSja1aUb/8qOnAGLYGvEwVdpHAI=</string>
 	<!-- Default automatic update checks to ON and suppress Sparkle's first-run

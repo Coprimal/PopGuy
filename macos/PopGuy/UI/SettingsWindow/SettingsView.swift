@@ -562,8 +562,8 @@ private struct SettingsFooter: View {
         formatVersionLabel(version: version, build: build)
     }
 
-    private static let authorURL = URL(string: "https://dinhanhthi.com")!
-    private static let githubURL = URL(string: "https://github.com/dinhanhthi/PopGuy")!
+    private static let authorURL = URL(string: "https://coprimal.dev")!
+    private static let githubURL = URL(string: "https://github.com/Coprimal/PopGuy")!
 
     var body: some View {
         VStack(spacing: 0) {
@@ -580,7 +580,7 @@ private struct SettingsFooter: View {
 
                 Spacer(minLength: 0)
 
-                Link("Anh-Thi DINH", destination: Self.authorURL)
+                Link("Coprimal", destination: Self.authorURL)
 
                 Text("·").foregroundStyle(.secondary)
 
