@@ -2,7 +2,7 @@
 //  PopGuyUITestsLaunchTests.swift
 //  PopGuyUITests
 //
-//  Created by Anh-Thi Dinh on 6/6/26.
+//  Created by Coprimal on 6/6/26.
 //
 
 import XCTest
