@@ -50,4 +50,4 @@ The Windows app is built on GitHub Actions only, see [windows/README.md](windows
 
 ## License
 
-AGPL-3.0, see [LICENSE](LICENSE).
+AGPL-3.0 © [Coprimal](https://coprimal.dev), see [LICENSE](LICENSE).
