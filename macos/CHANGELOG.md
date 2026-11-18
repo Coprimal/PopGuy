@@ -15,6 +15,8 @@ heading, which the release body shows under `## Windows`.
 <!-- Add entries here as you work. On release, rename this to `## [X.Y.Z] - YYYY-MM-DD`
      and start a fresh [Unreleased] section above it. -->
 
+## [1.4.12] - 2026-11-18
+
 ### Changed
 - PopGuy moved to the Coprimal organization: the project now lives at github.com/Coprimal/PopGuy and the website at popguy.coprimal.dev. About shows Coprimal, coprimal.dev and contact@coprimal.dev. Updates are now read from popguy.coprimal.dev/appcast.xml; older versions keep updating as before.
 
