@@ -8,6 +8,9 @@ namespace PopGuy.Tests.Core;
 public sealed class ComposerImageStoreTests : IDisposable
 {
     private readonly string _directory = Path.Combine(Path.GetTempPath(), "PopGuyTests-" + Guid.NewGuid().ToString("N"));
+    private readonly List<string> _log = [];
+
+    private ComposerImageStore NewStore() => new(_directory, _log.Add);
 
     public void Dispose()
     {
@@ -45,12 +48,12 @@ public sealed class ComposerImageStoreTests : IDisposable
     [Fact]
     public void SaveWritesTheBytesToANewPngFile()
     {
-        var store = new ComposerImageStore(_directory);
+        var store = NewStore();
         byte[] png = [0x89, 0x50, 0x4E, 0x47, 1, 2, 3];
 
         var path = store.Save(png);
 
-        Assert.NotNull(path);
+        Assert.True(path is not null, string.Join("; ", _log));
         Assert.Equal(_directory, Path.GetDirectoryName(path));
         Assert.EndsWith(".png", path);
         Assert.Equal(png, File.ReadAllBytes(path));
@@ -59,10 +62,11 @@ public sealed class ComposerImageStoreTests : IDisposable
     [Fact]
     public void PruneDeletesImagesOlderThanSevenDays()
     {
-        var store = new ComposerImageStore(_directory);
-        var old = store.Save([1])!;
-        var fresh = store.Save([2])!;
-        File.SetLastWriteTimeUtc(old, DateTime.UtcNow - TimeSpan.FromDays(8));
+        var store = NewStore();
+        var old = store.Save([1]);
+        var fresh = store.Save([2]);
+        Assert.True(old is not null && fresh is not null, string.Join("; ", _log));
+        File.SetLastWriteTimeUtc(old!, DateTime.UtcNow - TimeSpan.FromDays(8));
 
         store.Prune();
 

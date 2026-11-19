@@ -548,7 +548,7 @@ public sealed partial class ComposerWindow : Window
     private async void OnEditorPaste(object sender, TextControlPasteEventArgs e)
     {
         e.Handled = true;
-        string text;
+        string? text;
         try
         {
             var content = Clipboard.GetContent();

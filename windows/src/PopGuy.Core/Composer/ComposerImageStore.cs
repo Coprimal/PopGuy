@@ -60,7 +60,7 @@ public sealed class ComposerImageStore(string directory, Action<string>? log = n
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            log?.Invoke($"composer images: save failed, {e.GetType().Name}");
+            log?.Invoke($"composer images: save failed, {e.GetType().Name} 0x{e.HResult:X8}");
             return null;
         }
     }
