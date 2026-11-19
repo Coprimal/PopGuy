@@ -9,6 +9,12 @@ Before 1.4.0 Windows had its own versions (0.1.0).
 
 ## [Unreleased]
 
+## [1.4.13] - 2026-11-19
+
+### Added
+- Terminal Composer: Tab indents a Markdown list item one level and Shift+Tab outdents it; Backspace right after the marker of a nested item outdents it too, so you can write nested lists and step back out without deleting the marker.
+- Terminal Composer: pasting an image (a screenshot or a browser's "Copy Image") or copying image files inserts an @path mention. Claude Code and Gemini CLI attach the image when you submit the prompt, so images no longer get lost on the way back from the composer.
+
 ## [1.4.12] - 2026-11-18
 
 ### Changed
