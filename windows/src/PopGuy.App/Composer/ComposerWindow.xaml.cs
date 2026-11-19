@@ -70,7 +70,7 @@ public sealed partial class ComposerWindow : Window
     private bool _closed;
 
     /// <summary>Where pasted images are saved (null: images paste as nothing, as before).</summary>
-    public ComposerImageStore? ImageStore { get; init; }
+    public ComposerImageStore? ImageStore { get; set; }
 
     public ComposerWindow()
     {

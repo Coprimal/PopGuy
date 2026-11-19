@@ -3,9 +3,9 @@
 // file when the prompt is submitted, so the image survives the trip back from the external editor. Copied image files
 // (Explorer) are mentioned where they are, without a copy.
 //
-// Files: "<guid>.png" in <see cref="DefaultDirectory"/> (%LOCALAPPDATA%\PopGuyData\Composer\images), each with a DACL
-// that grants only the current user. They must outlive the composer (the prompt is submitted later), so they are pruned
-// by age (7 days) on each save, never on Done or Cancel.
+// Files: "<guid>.png" in <see cref="DefaultDirectory"/> (%LOCALAPPDATA%\PopGuyData\Composer\images), under the
+// profile's user-only ACL (the drafts' per-file DACL write is refused here with access denied). They must outlive the
+// composer (the prompt is submitted later), so they are pruned by age (7 days) on each save, never on Done or Cancel.
 
 namespace PopGuy.Core.Composer;
 
@@ -52,10 +52,7 @@ public sealed class ComposerImageStore(string directory, Action<string>? log = n
             Directory.CreateDirectory(directory);
             Prune();
             var path = Path.Combine(directory, Guid.NewGuid().ToString("N") + ".png");
-            if (OperatingSystem.IsWindows())
-                ComposerDraftStore.WritePrivate(path, png);
-            else
-                File.WriteAllBytes(path, png);
+            File.WriteAllBytes(path, png);
             return path;
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
