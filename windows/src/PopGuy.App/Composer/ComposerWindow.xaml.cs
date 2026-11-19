@@ -27,7 +27,8 @@ namespace PopGuy.Composer;
 /// <see cref="RichEditBox"/> (paste and copy are plain text) with simple Markdown highlighting from
 /// <see cref="MarkdownHighlighter"/>: a heading line bold at the base size, code monospace on a subtle background,
 /// bold and italic as their traits, list markers and fence lines dimmed. Keys: Ctrl+Enter Done, Ctrl+Shift+Enter Done
-/// &amp; Submit, Esc Cancel (closes the find bar first), Ctrl+F find. Unlike the toolbar, the composer takes the
+/// &amp; Submit, Esc Cancel (closes the find bar first), Ctrl+F find; Tab / Shift+Tab indent / outdent a list item.
+/// Pasting an image (or copied image files) inserts "@path" mentions (<see cref="ComposerImageStore"/>). Unlike the toolbar, the composer takes the
 /// foreground. One window per session: the controller makes it, answers its requests and closes it with
 /// <see cref="CloseComposer"/>. The text is never logged. UI thread only.
 /// </summary>
@@ -67,6 +68,9 @@ public sealed partial class ComposerWindow : Window
     private bool _placed;
     private bool _closingByCode;
     private bool _closed;
+
+    /// <summary>Where pasted images are saved (null: images paste as nothing, as before).</summary>
+    public ComposerImageStore? ImageStore { get; init; }
 
     public ComposerWindow()
     {
@@ -463,19 +467,25 @@ public sealed partial class ComposerWindow : Window
     }
 
     /// <summary>
-    /// Enter and Backspace continue and end Markdown lists. Undo and redo step over the format passes (they leave the
-    /// text as it was), so one key is one edit.
+    /// Enter and Backspace continue and end Markdown lists, Tab and Shift+Tab indent and outdent list items. Undo and
+    /// redo step over the format passes (they leave the text as it was), so one key is one edit.
     /// </summary>
     private void OnEditorPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
         var shift = IsDown(VirtualKey.Shift);
         if (!IsDown(VirtualKey.Control))
         {
-            if (!shift && !IsDown(VirtualKey.Menu) && e.Key is VirtualKey.Enter or VirtualKey.Back
-                && ApplyListEdit(enter: e.Key == VirtualKey.Enter))
+            if (IsDown(VirtualKey.Menu)) return;
+            Func<string, int, ListEdit?>? makeEdit = e.Key switch
             {
-                e.Handled = true;
-            }
+                VirtualKey.Enter when !shift => ListContinuation.ReturnEdit,
+                VirtualKey.Back when !shift => ListContinuation.BackspaceEdit,
+                VirtualKey.Tab => shift ? ListContinuation.OutdentEdit : ListContinuation.IndentEdit,
+                _ => null,
+            };
+            if (makeEdit is not null && ApplyListEdit(makeEdit)) e.Handled = true;
+            // Shift+Tab off a nested item does nothing (never moves the focus out of the editor).
+            else if (e.Key == VirtualKey.Tab && shift) e.Handled = true;
             return;
         }
         if (e.Key == VirtualKey.Z)
@@ -491,18 +501,15 @@ public sealed partial class ComposerWindow : Window
     }
 
     /// <summary>
-    /// The <see cref="ListContinuation"/> edit for Enter or Backspace at a caret (no selection), as one undoable edit
-    /// with the caret after it; false: the key does its own thing.
+    /// The <see cref="ListContinuation"/> edit at a caret (no selection), as one undoable edit with the caret after it;
+    /// false: the key does its own thing.
     /// </summary>
-    private bool ApplyListEdit(bool enter)
+    private bool ApplyListEdit(Func<string, int, ListEdit?> makeEdit)
     {
         var document = Editor.TextDocument;
         var selection = document.Selection;
         if (selection.StartPosition != selection.EndPosition) return false;
-        var text = RawText();
-        var caret = selection.StartPosition;
-        if ((enter ? ListContinuation.ReturnEdit(text, caret) : ListContinuation.BackspaceEdit(text, caret)) is not { } edit)
-            return false;
+        if (makeEdit(RawText(), selection.StartPosition) is not { } edit) return false;
         var range = document.GetRange(edit.Start, edit.Start + edit.Length);
         range.SetText(TextSetOptions.None, edit.Replacement.Replace('\n', '\r'));
         selection.SetRange(range.EndPosition, range.EndPosition);
@@ -536,7 +543,7 @@ public sealed partial class ComposerWindow : Window
         UpdateFooter();
     }
 
-    // Paste: plain text only.
+    // Paste: plain text, or "@path" mentions for an image or copied image files.
 
     private async void OnEditorPaste(object sender, TextControlPasteEventArgs e)
     {
@@ -545,10 +552,10 @@ public sealed partial class ComposerWindow : Window
         try
         {
             var content = Clipboard.GetContent();
-            if (!content.Contains(StandardDataFormats.Text)) return;
-            text = await content.GetTextAsync();
+            text = await ImagePasteText(content) ?? (content.Contains(StandardDataFormats.Text) ? await content.GetTextAsync() : null);
+            if (text is null) return;
         }
-        catch (Exception exception) when (exception is COMException or UnauthorizedAccessException)
+        catch (Exception exception) when (exception is COMException or UnauthorizedAccessException or IOException)
         {
             return;
         }
@@ -556,6 +563,58 @@ public sealed partial class ComposerWindow : Window
         var selection = Editor.TextDocument.Selection;
         selection.SetText(TextSetOptions.None, text.Replace("\r\n", "\r").Replace('\n', '\r'));
         selection.Collapse(false);
+    }
+
+    /// <summary>
+    /// The mentions to paste for the clipboard's images, or null to paste text: copied files that are all images (their
+    /// own paths), else a bitmap when the clipboard has no text (or only a lone URL, as browsers copy an image), saved as
+    /// a PNG in <see cref="ImageStore"/>.
+    /// </summary>
+    private async Task<string?> ImagePasteText(DataPackageView content)
+    {
+        if (ImageStore is not { } store) return null;
+        List<string> paths;
+        if (content.Contains(StandardDataFormats.StorageItems))
+        {
+            var items = await content.GetStorageItemsAsync();
+            paths = [.. items.Select(item => item.Path)];
+            if (paths.Count == 0 || !paths.All(path => !string.IsNullOrEmpty(path) && ComposerImageStore.IsImageFile(path))) return null;
+        }
+        else
+        {
+            if (!content.Contains(StandardDataFormats.Bitmap)) return null;
+            if (content.Contains(StandardDataFormats.Text) && !ComposerImageStore.IsLoneUrl(await content.GetTextAsync())) return null;
+            var png = await EncodePng(await content.GetBitmapAsync());
+            if (await Task.Run(() => store.Save(png)) is not { } path) return null;
+            paths = [path];
+        }
+        if (_closed) return null;
+        var selection = Editor.TextDocument.Selection;
+        char? previous = null;
+        if (selection.StartPosition > 0)
+        {
+            var before = RawText();
+            if (selection.StartPosition <= before.Length) previous = before[selection.StartPosition - 1];
+        }
+        return ComposerImageStore.Insertion(paths, previous);
+    }
+
+    /// <summary>The clipboard bitmap re-encoded as PNG.</summary>
+    private static async Task<byte[]> EncodePng(Windows.Storage.Streams.RandomAccessStreamReference reference)
+    {
+        using var source = await reference.OpenReadAsync();
+        var decoder = await Windows.Graphics.Imaging.BitmapDecoder.CreateAsync(source);
+        using var bitmap = await decoder.GetSoftwareBitmapAsync();
+        using var output = new Windows.Storage.Streams.InMemoryRandomAccessStream();
+        var encoder = await Windows.Graphics.Imaging.BitmapEncoder.CreateAsync(Windows.Graphics.Imaging.BitmapEncoder.PngEncoderId, output);
+        encoder.SetSoftwareBitmap(bitmap);
+        await encoder.FlushAsync();
+        var bytes = new byte[output.Size];
+        output.Seek(0);
+        using var reader = new Windows.Storage.Streams.DataReader(output);
+        await reader.LoadAsync((uint)output.Size);
+        reader.ReadBytes(bytes);
+        return bytes;
     }
 
     // Highlighting.

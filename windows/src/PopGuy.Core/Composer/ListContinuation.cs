@@ -3,7 +3,9 @@
 //   - Enter on a list item ("-", "*" or "1." + space, after indentation) starts the next item with the same
 //     indentation and marker; a number goes up by one.
 //   - Enter on an empty item clears its marker, ending the list.
-//   - Backspace right after a marker deletes the whole marker.
+//   - Backspace right after a marker outdents a nested item one level, and deletes the whole marker of a top-level one.
+//   - Tab / Shift+Tab (caret anywhere on the item's line) indent / outdent the item by one level: two spaces (or one
+//     leading tab when outdenting).
 // Markers are the ones MarkdownHighlighter colors. Lines end at "\n", "\r" or "\v" (RichEdit's paragraph mark and soft
 // break); an inserted line break is "\n". Positions are C# string indices.
 
@@ -28,8 +30,34 @@ public static class ListContinuation
     public static ListEdit? BackspaceEdit(string text, int caret)
     {
         if (Item(text, caret) is not { } item || caret != item.MarkerEnd) return null;
+        if (item.Indentation.Length > 0) return OutdentEdit(text, caret);
         return new ListEdit(item.MarkerStart, item.MarkerEnd - item.MarkerStart, "");
     }
+
+    /// <summary>
+    /// The edit for Tab with the caret at <paramref name="caret"/>; null: not on a list item. It rewrites the line up to
+    /// the caret, so the caret stays on the same character.
+    /// </summary>
+    public static ListEdit? IndentEdit(string text, int caret)
+    {
+        if (Item(text, caret) is not { } item) return null;
+        return new ListEdit(item.LineStart, caret - item.LineStart, IndentUnit + text[item.LineStart..caret]);
+    }
+
+    /// <summary>
+    /// The edit for Shift+Tab with the caret at <paramref name="caret"/>; null: not on an indented list item. It rewrites
+    /// the line up to the caret (or the end of the removed indentation).
+    /// </summary>
+    public static ListEdit? OutdentEdit(string text, int caret)
+    {
+        if (Item(text, caret) is not { } item || item.Indentation.Length == 0) return null;
+        var indentation = item.Indentation;
+        var removed = indentation[0] == '\t' ? 1 : indentation.Length > 1 && indentation[1] == ' ' ? 2 : 1;
+        var end = Math.Max(caret, item.LineStart + removed);
+        return new ListEdit(item.LineStart, end - item.LineStart, text[(item.LineStart + removed)..end]);
+    }
+
+    private const string IndentUnit = "  ";
 
     /// <summary>The list item on the line with the caret. <c>MarkerEnd</c> is after the marker's space.</summary>
     private readonly record struct ListItem(

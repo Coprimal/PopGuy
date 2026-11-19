@@ -6,7 +6,9 @@
 // formatting), no smart quotes/dashes or autocorrect (prompt and code text).
 //
 // Keys: Cmd+Return → onDone, Cmd+Shift+Return → onDoneAndSubmit, Esc → onCancel.
-// Return and Backspace continue and end Markdown lists (ListContinuation).
+// Return and Backspace continue and end Markdown lists, Tab and Shift+Tab indent and
+// outdent list items (ListContinuation). Pasting an image inserts an "@path" mention
+// (ComposerImageStore).
 // Standard edit shortcuts (cut/copy/paste/undo/redo/select all/find) are handled
 // in the view itself, so they work whether or not the app's main menu has an Edit menu.
 //
@@ -151,9 +153,33 @@ final class ComposerNSTextView: NSTextView {
         if !applyListEdit(ListContinuation.returnEdit) { super.insertNewline(sender) }
     }
 
-    /// Backspace right after a list marker deletes the marker.
+    /// Backspace right after a list marker outdents a nested item or deletes a top-level marker.
     override func deleteBackward(_ sender: Any?) {
         if !applyListEdit(ListContinuation.backspaceEdit) { super.deleteBackward(sender) }
+    }
+
+    /// Tab on a list item indents it one level.
+    override func insertTab(_ sender: Any?) {
+        if !applyListEdit(ListContinuation.indentEdit) { super.insertTab(sender) }
+    }
+
+    /// Shift+Tab on a nested list item outdents it one level; elsewhere it does nothing
+    /// (never moves the focus out of the editor).
+    override func insertBacktab(_ sender: Any?) {
+        _ = applyListEdit(ListContinuation.outdentEdit)
+    }
+
+    /// An image (or copied image files) pastes as "@path" mentions; anything else as plain text.
+    override func paste(_ sender: Any?) {
+        guard !hasMarkedText(), let paths = ComposerImageStore.standard?.imagePaths(from: .general) else {
+            super.paste(sender)
+            return
+        }
+        let range = selectedRange()
+        let previous = range.location > 0
+            ? (string as NSString).substring(with: NSRange(location: range.location - 1, length: 1)).first
+            : nil
+        insertText(ComposerImageStore.insertion(for: paths, after: previous), replacementRange: range)
     }
 
     /// Applies the list edit for a single caret (no selection, no IME composition) as one undoable edit.

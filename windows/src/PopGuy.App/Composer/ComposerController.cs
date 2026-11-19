@@ -65,6 +65,7 @@ internal sealed class ComposerController
 
     private readonly ComposerPipeServer _server;
     private readonly ComposerDraftStore _store;
+    private readonly ComposerImageStore _images;
     private readonly IComposeOutput _output;
     private readonly Action<string> _log;
     private readonly Dictionary<ComposerSession, Delivery> _awaitingEnd = [];
@@ -78,6 +79,7 @@ internal sealed class ComposerController
         _output = output;
         _log = log;
         _store = new ComposerDraftStore(ComposerDraftStore.DefaultDirectory(paths), log);
+        _images = new ComposerImageStore(ComposerImageStore.DefaultDirectory(paths), log);
         _server = new ComposerPipeServer(dispatcher, log);
         _server.SessionOpened += OnSessionOpened;
         _server.SessionEnded += OnSessionEnded;
@@ -196,7 +198,7 @@ internal sealed class ComposerController
         string text, ComposerSession? session, nint source, string? sourceName, bool allowSubmit, bool fromPipe,
         string? noTargetHint = null)
     {
-        var window = new ComposerWindow();
+        var window = new ComposerWindow { ImageStore = _images };
         var open = new OpenComposer(window, session, source, Guid.NewGuid(), text, allowSubmit);
         _open = open;
         Volatile.Write(ref _openHwnd, window.Hwnd);

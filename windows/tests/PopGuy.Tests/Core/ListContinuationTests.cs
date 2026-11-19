@@ -4,7 +4,8 @@ namespace PopGuy.Tests.Core;
 
 // The Terminal Composer's Markdown list editing (pure text -> edit), as in
 // macos/PopGuyTests/Unit/ListContinuationTests.swift: Enter continues "-", "*" and numbered items and clears an empty
-// one, Backspace right after a marker deletes it. RichEdit's "\r" and "\v" line ends count as lines too.
+// one, Backspace right after a marker deletes it (top level) or outdents the item (nested), Tab / Shift+Tab indent /
+// outdent a list item by two spaces with the caret kept in place. RichEdit's "\r" and "\v" line ends count as lines too.
 public sealed class ListContinuationTests
 {
     private static string? Apply(ListEdit? edit, string text) =>
@@ -15,6 +16,14 @@ public sealed class ListContinuationTests
 
     private static string? AfterBackspace(string text, int? caret = null) =>
         Apply(ListContinuation.BackspaceEdit(text, caret ?? text.Length), text);
+
+    private static string? AfterIndent(string text, int? caret = null) =>
+        Apply(ListContinuation.IndentEdit(text, caret ?? text.Length), text);
+
+    private static string? AfterOutdent(string text, int? caret = null) =>
+        Apply(ListContinuation.OutdentEdit(text, caret ?? text.Length), text);
+
+    private static int? CaretAfter(ListEdit? edit) => edit is { } e ? e.Start + e.Replacement.Length : null;
 
     [Fact]
     public void ReturnContinuesBulletsAndNumbersWithTheSameIndentation()
@@ -42,13 +51,51 @@ public sealed class ListContinuationTests
     }
 
     [Fact]
-    public void BackspaceRightAfterAMarkerDeletesTheMarker()
+    public void BackspaceRightAfterATopLevelMarkerDeletesTheMarker()
     {
         Assert.Equal("- one\r", AfterBackspace("- one\r- "));
-        Assert.Equal("  ", AfterBackspace("  12. "));
+        Assert.Equal("", AfterBackspace("12. "));
         Assert.Equal("item", AfterBackspace("* item", 2));
         Assert.Null(AfterBackspace("- item"));
         Assert.Null(AfterBackspace("- ", 1));
         Assert.Null(AfterBackspace("plain "));
+    }
+
+    [Fact]
+    public void BackspaceRightAfterANestedMarkerOutdentsTheItem()
+    {
+        Assert.Equal("- one\r- ", AfterBackspace("- one\r  - "));
+        Assert.Equal("  12. ", AfterBackspace("    12. "));
+        Assert.Equal("* x", AfterBackspace("\t* x", 3));
+        Assert.Equal("- ", AfterBackspace(" - "));
+    }
+
+    [Fact]
+    public void TabIndentsAListItemByTwoSpacesWhereverTheCaretIs()
+    {
+        Assert.Equal("- one\r  - ", AfterIndent("- one\r- "));
+        Assert.Equal("- one\v  - two", AfterIndent("- one\v- two", 8));
+        Assert.Equal("    1. x\rnext", AfterIndent("  1. x\rnext", 0));
+        Assert.Null(AfterIndent("plain"));
+        Assert.Null(AfterIndent("- one\r"));
+    }
+
+    [Fact]
+    public void ShiftTabOutdentsAListItemAndATopLevelItemStays()
+    {
+        Assert.Equal("- one\r- two", AfterOutdent("- one\r  - two"));
+        Assert.Equal("   * x", AfterOutdent("     * x", 1));
+        Assert.Equal("\t- x", AfterOutdent("\t\t- x"));
+        Assert.Null(AfterOutdent("- top"));
+        Assert.Null(AfterOutdent("  plain"));
+    }
+
+    [Fact]
+    public void IndentAndOutdentKeepTheCaretOnTheSameCharacter()
+    {
+        Assert.Equal(5, CaretAfter(ListContinuation.IndentEdit("- two", 3)));
+        Assert.Equal(3, CaretAfter(ListContinuation.OutdentEdit("  - two", 5)));
+        // The caret inside the removed indentation lands at the line start.
+        Assert.Equal(0, CaretAfter(ListContinuation.OutdentEdit("    - x", 1)));
     }
 }

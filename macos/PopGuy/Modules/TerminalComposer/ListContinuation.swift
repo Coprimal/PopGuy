@@ -5,7 +5,10 @@
 //   - Return on a list item (`-`, `*` or `1.` + space, after indentation) starts the
 //     next item with the same indentation and marker; a number goes up by one.
 //   - Return on an empty item clears its marker, ending the list.
-//   - Backspace right after a marker deletes the whole marker.
+//   - Backspace right after a marker outdents a nested item one level, and deletes
+//     the whole marker of a top-level one.
+//   - Tab / Shift+Tab (caret anywhere on the item's line) indent / outdent the item
+//     by one level: two spaces (or one leading tab when outdenting).
 // Markers are the ones MarkdownHighlighter colors. Ranges are UTF-16 offsets.
 
 import Foundation
@@ -28,8 +31,29 @@ nonisolated enum ListContinuation {
     /// The edit for Backspace with the caret at `caret`; nil: a plain backspace.
     static func backspaceEdit(in text: String, caret: Int) -> Edit? {
         guard let item = ListItem(text as NSString, caret: caret), caret == item.markerEnd else { return nil }
+        if !item.indentation.isEmpty { return outdentEdit(in: text, caret: caret) }
         return Edit(range: NSRange(location: item.markerStart, length: item.markerEnd - item.markerStart), replacement: "")
     }
+
+    /// The edit for Tab with the caret at `caret`; nil: not on a list item.
+    /// It rewrites the line up to the caret, so the caret stays on the same character.
+    static func indentEdit(in text: String, caret: Int) -> Edit? {
+        guard let item = ListItem(text as NSString, caret: caret) else { return nil }
+        let head = (text as NSString).substring(with: NSRange(location: item.lineStart, length: caret - item.lineStart))
+        return Edit(range: NSRange(location: item.lineStart, length: caret - item.lineStart), replacement: indentUnit + head)
+    }
+
+    /// The edit for Shift+Tab with the caret at `caret`; nil: not on an indented list item.
+    /// It rewrites the line up to the caret (or the end of the removed indentation).
+    static func outdentEdit(in text: String, caret: Int) -> Edit? {
+        guard let item = ListItem(text as NSString, caret: caret), !item.indentation.isEmpty else { return nil }
+        let removed = item.indentation.hasPrefix("\t") ? 1 : item.indentation.prefix(indentUnit.count).prefix { $0 == " " }.count
+        let end = max(caret, item.lineStart + removed)
+        let head = (text as NSString).substring(with: NSRange(location: item.lineStart + removed, length: end - item.lineStart - removed))
+        return Edit(range: NSRange(location: item.lineStart, length: end - item.lineStart), replacement: head)
+    }
+
+    private static let indentUnit = "  "
 }
 
 /// The list item on the line with the caret.

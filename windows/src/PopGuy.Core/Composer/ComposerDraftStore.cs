@@ -180,7 +180,7 @@ public sealed class ComposerDraftStore(string directory, Action<string>? log = n
     /// handle for an existing one (Windows keeps an existing file's security when it is overwritten).
     /// </summary>
     [SupportedOSPlatform("windows")]
-    private static void WritePrivate(string path, byte[] bytes)
+    internal static void WritePrivate(string path, byte[] bytes)
     {
         var security = new FileSecurity();
         security.SetAccessRuleProtection(isProtected: true, preserveInheritance: false);

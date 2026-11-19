@@ -5,7 +5,8 @@
 // Covers:
 //   - Return continues "-", "*" and numbered items (indentation kept, number + 1)
 //   - Return on an empty item clears it; Return before the marker or off a list is plain
-//   - Backspace right after a marker deletes the marker, elsewhere it is plain
+//   - Backspace right after a marker deletes the marker (top level) or outdents (nested), elsewhere it is plain
+//   - Tab / Shift+Tab indent / outdent a list item by two spaces, the caret staying in place
 //   - The composer's text view applies them on Return/Backspace
 
 import AppKit
@@ -26,6 +27,14 @@ struct ListContinuationTests {
 
     private func afterBackspace(_ text: String, caret: Int? = nil) -> String? {
         applying(ListContinuation.backspaceEdit(in: text, caret: caret ?? (text as NSString).length), to: text)
+    }
+
+    private func afterIndent(_ text: String, caret: Int? = nil) -> String? {
+        applying(ListContinuation.indentEdit(in: text, caret: caret ?? (text as NSString).length), to: text)
+    }
+
+    private func afterOutdent(_ text: String, caret: Int? = nil) -> String? {
+        applying(ListContinuation.outdentEdit(in: text, caret: caret ?? (text as NSString).length), to: text)
     }
 
     @Test("Return continues bullets and numbers with the same indentation")
@@ -51,14 +60,51 @@ struct ListContinuationTests {
         #expect(afterReturn("- one", caret: 1) == nil)
     }
 
-    @Test("Backspace right after a marker deletes the marker")
+    @Test("Backspace right after a top-level marker deletes the marker")
     func backspaceDeletesMarker() {
         #expect(afterBackspace("- one\n- ") == "- one\n")
-        #expect(afterBackspace("  12. ") == "  ")
+        #expect(afterBackspace("12. ") == "")
         #expect(afterBackspace("* item", caret: 2) == "item")
         #expect(afterBackspace("- item") == nil)
         #expect(afterBackspace("- ", caret: 1) == nil)
         #expect(afterBackspace("plain ") == nil)
+    }
+
+    @Test("Backspace right after a nested marker outdents the item one level")
+    func backspaceOutdentsNested() {
+        #expect(afterBackspace("- one\n  - ") == "- one\n- ")
+        #expect(afterBackspace("    12. ") == "  12. ")
+        #expect(afterBackspace("\t* x", caret: 3) == "* x")
+        #expect(afterBackspace(" - ") == "- ")
+    }
+
+    @Test("Tab indents a list item by two spaces wherever the caret is on its line")
+    func tabIndents() {
+        #expect(afterIndent("- one\n- ") == "- one\n  - ")
+        #expect(afterIndent("- one\n- two", caret: 8) == "- one\n  - two")
+        #expect(afterIndent("  1. x\nnext", caret: 0) == "    1. x\nnext")
+        #expect(afterIndent("plain") == nil)
+        #expect(afterIndent("- one\n") == nil)
+    }
+
+    @Test("Shift+Tab outdents a list item; a top-level item stays")
+    func shiftTabOutdents() {
+        #expect(afterOutdent("- one\n  - two") == "- one\n- two")
+        #expect(afterOutdent("     * x", caret: 1) == "   * x")
+        #expect(afterOutdent("\t\t- x") == "\t- x")
+        #expect(afterOutdent("- top") == nil)
+        #expect(afterOutdent("  plain") == nil)
+    }
+
+    @Test("indent and outdent keep the caret on the same character")
+    func caretStaysInPlace() {
+        let indent = ListContinuation.indentEdit(in: "- two", caret: 3)
+        #expect(indent.map { $0.range.location + ($0.replacement as NSString).length } == 5)
+        let outdent = ListContinuation.outdentEdit(in: "  - two", caret: 5)
+        #expect(outdent.map { $0.range.location + ($0.replacement as NSString).length } == 3)
+        // The caret inside the removed indentation lands at the line start.
+        let early = ListContinuation.outdentEdit(in: "    - x", caret: 1)
+        #expect(early.map { $0.range.location + ($0.replacement as NSString).length } == 0)
     }
 
     @Test("the composer text view applies list edits on Return and Backspace")
@@ -75,5 +121,12 @@ struct ListContinuationTests {
         textView.insertNewline(nil)
         textView.insertNewline(nil)
         #expect(textView.string == "1. one\n- a\n")
+        textView.insertText("- b", replacementRange: textView.selectedRange())
+        textView.insertNewline(nil)
+        textView.insertTab(nil)
+        #expect(textView.string == "1. one\n- a\n- b\n  - ")
+        textView.insertBacktab(nil)
+        #expect(textView.string == "1. one\n- a\n- b\n- ")
+        #expect(textView.selectedRange().location == ("1. one\n- a\n- b\n- " as NSString).length)
     }
 }
