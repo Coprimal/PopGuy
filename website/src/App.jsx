@@ -7,6 +7,7 @@ import {
   useLocation
 } from "react-router-dom";
 import { SITE_URL } from "./constants";
+import { useScrollEffects } from "./components/demo/motion";
 import { Footer } from "./components/Footer";
 import { Header } from "./components/Header";
 import { ActionsPage } from "./pages/ActionsPage";
@@ -36,6 +37,17 @@ export function AppRoutes() {
     }
     canonical.href = SITE_URL + (titles[location.pathname] ? location.pathname : "/");
   }, [location.pathname]);
+
+  // React Router keeps the scroll position between routes and ignores the hash: jump to the anchor, or to the top.
+  useEffect(() => {
+    const id = location.hash.slice(1);
+    const target = id ? document.getElementById(decodeURIComponent(id)) : null;
+    if (target) target.scrollIntoView?.();
+    // Instant: the page's smooth scrolling is for in-page anchors, not for a new page.
+    else window.scrollTo({ top: 0, left: 0, behavior: "instant" });
+  }, [location.pathname, location.hash]);
+
+  useScrollEffects(location.pathname);
 
   return (
     <div className="page">

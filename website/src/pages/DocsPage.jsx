@@ -1,4 +1,6 @@
+import { Info } from "lucide-react";
 import { useEffect, useState } from "react";
+import { PageHero } from "../components/PageHero";
 import { RichText } from "../components/RichText";
 import { docsContent, docsSections } from "../data/docs";
 
@@ -30,12 +32,15 @@ export function DocsPage() {
 
   return (
     <main>
-      <section className="hero">
-        <h1>Docs</h1>
-      </section>
+      <PageHero
+        kicker="Documentation"
+        title="Docs"
+        lead="Install PopGuy, make your own actions, and bring your PopClip extensions along."
+      />
 
-      <div className="docs-layout">
+      <div className="container side-layout">
         <nav className="toc" aria-label="Documentation">
+          <p className="toc__title">On this page</p>
           <ul>
             {docsSections.map((item) => (
               <li key={item}>
@@ -50,17 +55,19 @@ export function DocsPage() {
           </ul>
         </nav>
 
-        <div className="docs-content">
+        <div className="prose">
           {docsSections.map((sectionKey) => {
             const section = docsContent[sectionKey];
             return (
               <section key={sectionKey} id={slug(sectionKey)} className="doc">
                 <h2>{sectionKey}</h2>
-                <p><RichText text={section.summary} /></p>
-                {section.notice ? <p className="notice"><RichText text={section.notice} /></p> : null}
+                <p className="doc__summary"><RichText text={section.summary} /></p>
+                {section.notice ? (
+                  <p className="notice"><Info aria-hidden="true" /><span><RichText text={section.notice} /></span></p>
+                ) : null}
 
                 {section.sections.map((sub) => (
-                  <div key={sub.title}>
+                  <div key={sub.title} className="doc__sub">
                     <h3>{sub.title}</h3>
                     {sub.body ? <p><RichText text={sub.body} /></p> : null}
                     {sub.code ? <pre><code>{sub.code}</code></pre> : null}

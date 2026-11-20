@@ -1,31 +1,55 @@
-/* Hallmark · pre-emit critique: P4 H4 E4 S4 R5 V4
- * genre: modern-minimal · macrostructure: Narrative Workflow
- * theme: Coral (monochrome ink · shadcn-zinc) · enrichment: none
- * nav: N1b · footer: Ft2 · tone: utilitarian
- * audience: macOS writers · use: download · paper: light / geometric-sans / neutral
+/* PopGuy site tokens: neutral soft black and zinc greys; the only colors are the diff's green/red, the mascot's
+ * sparkle, and the native macOS colors inside the drawings of the app.
+ * Display: Bricolage Grotesque · body: Geist · mock documents: Newsreader · code: Geist Mono.
  */
 :root {
   color-scheme: light;
-  --color-paper: oklch(99% 0.003 264);
-  --color-paper-2: oklch(97% 0.004 264);
-  --color-paper-3: oklch(94.5% 0.006 264);
-  --color-ink: oklch(20% 0.012 264);
-  --color-ink-2: oklch(32% 0.01 264);
-  --color-muted: oklch(48% 0.012 264);
-  --color-rule: oklch(90% 0.008 264);
-  --color-rule-strong: oklch(84% 0.01 264);
-  --color-accent: oklch(20% 0.012 264);
-  --color-accent-ink: oklch(99% 0.003 264);
-  --color-focus: oklch(48% 0.14 264);
-  --color-hover: oklch(96% 0.005 264);
-  --color-danger: oklch(52% 0.18 25);
-  --color-success: oklch(48% 0.14 155);
+  --color-paper: #fafafa;
+  --color-paper-2: #f4f4f5;
+  --color-paper-3: #ebebed;
+  --color-surface: #ffffff;
+  --color-ink: #1c1c1f;
+  --color-ink-2: #3f3f46;
+  --color-muted: #71717a;
+  --color-rule: #e4e4e7;
+  --color-rule-strong: #d4d4d8;
+  --color-accent: #1c1c1f;
+  --color-accent-ink: #fafafa;
+  --color-accent-soft: #efeff1;
+  --color-band: #1c1c1f;
+  --color-band-2: #26262a;
+  --color-sun: #f5a524;
+  --color-focus: #1c1c1f;
+  --color-hover: #f1f1f3;
+  --color-selection: rgba(28, 28, 31, 0.12);
+  --color-add: #1f8a4c;
+  --color-add-bg: #dcf3e4;
+  --color-del: #d23b32;
+  --color-del-bg: #fbe2e0;
+  --color-code-bg: #1c1c1f;
+  --color-code-ink: #e4e4e7;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04), 0 6px 20px -12px rgba(0, 0, 0, 0.12);
+  --shadow-float: 0 2px 6px rgba(0, 0, 0, 0.05), 0 22px 44px -22px rgba(0, 0, 0, 0.28);
 
-  --font-display: "Geist", ui-sans-serif, system-ui, sans-serif;
+  /* Native macOS look, used only by the drawings of the app (toolbar, document window). */
+  --mac-window: #ffffff;
+  --mac-titlebar: #f6f6f6;
+  --mac-panel: #ececec;
+  --mac-text: rgba(0, 0, 0, 0.85);
+  --mac-text-2: rgba(0, 0, 0, 0.5);
+  --mac-sep: rgba(0, 0, 0, 0.1);
+  --mac-wash: rgba(0, 0, 0, 0.07);
+  --mac-button: #ffffff;
+  --mac-button-edge: rgba(0, 0, 0, 0.14);
+  --mac-accent: #007aff;
+  --mac-selection: #b3d7ff;
+  --mac-green: #248a3d;
+  --mac-red: #e0352b;
+
+  --font-display: "Bricolage Grotesque", "Geist", ui-sans-serif, system-ui, sans-serif;
   --font-body: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-serif: "Newsreader", Georgia, "Times New Roman", serif;
   --font-outlier: "Geist Mono", ui-monospace, SFMono-Regular, Menlo, monospace;
-  --font-heading: var(--font-display);
-  --font-sans: var(--font-body);
 
   --space-3xs: 0.125rem;
   --space-2xs: 0.25rem;
@@ -33,50 +57,74 @@
   --space-sm: 0.75rem;
   --space-md: 1rem;
   --space-lg: 1.5rem;
-  --space-xl: 2.5rem;
-  --space-2xl: 4rem;
-  --space-3xl: 6rem;
-  --space-4xl: 9rem;
+  --space-xl: 2.25rem;
+  --space-2xl: 3.5rem;
+  --space-3xl: 5rem;
 
   --text-xs: 0.75rem;
   --text-sm: 0.875rem;
-  --text-md: 1.125rem;
-  --text-lg: 1.375rem;
-  --text-xl: 1.75rem;
-  --text-2xl: 2.25rem;
-  --text-display: clamp(2rem, 4.4vw, 2.75rem);
-  --text-display-s: clamp(1.75rem, 3vw, 2.25rem);
+  --text-base: 1rem;
+  --text-md: 1.0625rem;
+  --text-lg: 1.25rem;
+  --text-xl: clamp(1.5rem, 2.6vw, 1.875rem);
+  --text-display: clamp(2rem, 4.2vw, 2.75rem);
 
   --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
-  --ease-in: cubic-bezier(0.7, 0, 0.84, 0);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
   --ease-in-out: cubic-bezier(0.65, 0, 0.35, 1);
   --dur-micro: 120ms;
   --dur-short: 220ms;
-  --dur-long: 420ms;
+  --dur-long: 520ms;
 
   --radius-sm: 0.5rem;
-  --radius-card: 0.75rem;
-  --radius-input: 0.75rem;
+  --radius-card: 1rem;
+  --radius-lg: 1.375rem;
   --radius-pill: 999px;
-  --radius: var(--radius-card);
-  --radius-lg: 1rem;
 
   --rule: 1px solid var(--color-rule);
+  --container: 70rem;
+  --prose: 44rem;
 }
 
-/* Dark theme — set on <html data-theme="dark"> (index.html picks the saved or system theme). */
+/* Dark theme: set on <html data-theme="dark"> (index.html picks the saved or system theme). */
 :root[data-theme="dark"] {
   color-scheme: dark;
-  --color-paper: oklch(15% 0.005 264);
-  --color-paper-2: oklch(19% 0.006 264);
-  --color-paper-3: oklch(24% 0.008 264);
-  --color-ink: oklch(96% 0.004 264);
-  --color-ink-2: oklch(88% 0.006 264);
-  --color-muted: oklch(70% 0.01 264);
-  --color-rule: oklch(28% 0.008 264);
-  --color-rule-strong: oklch(36% 0.01 264);
-  --color-accent: oklch(96% 0.004 264);
-  --color-accent-ink: oklch(15% 0.005 264);
-  --color-focus: oklch(72% 0.14 264);
-  --color-hover: oklch(21% 0.006 264);
+  --color-paper: #141416;
+  --color-paper-2: #1a1a1d;
+  --color-paper-3: #232327;
+  --color-surface: #1c1c1f;
+  --color-ink: #ededef;
+  --color-ink-2: #c7c7cc;
+  --color-muted: #8e8e95;
+  --color-rule: #2a2a2e;
+  --color-rule-strong: #3a3a3f;
+  --color-accent: #ededef;
+  --color-accent-ink: #141416;
+  --color-accent-soft: #26262a;
+  --color-band: #1f1f22;
+  --color-band-2: #2a2a2e;
+  --color-focus: #ededef;
+  --color-hover: #222226;
+  --color-selection: rgba(237, 237, 239, 0.16);
+  --color-add: #4fd17f;
+  --color-add-bg: rgba(52, 199, 89, 0.16);
+  --color-del: #ff6b62;
+  --color-del-bg: rgba(255, 69, 58, 0.16);
+  --color-code-bg: #0e0e10;
+  --shadow-card: 0 1px 2px rgba(0, 0, 0, 0.3), 0 10px 26px -14px rgba(0, 0, 0, 0.6);
+  --shadow-float: 0 2px 6px rgba(0, 0, 0, 0.3), 0 26px 50px -22px rgba(0, 0, 0, 0.75);
+
+  --mac-window: #1e1e1e;
+  --mac-titlebar: #2a2a2a;
+  --mac-panel: #2c2c2e;
+  --mac-text: rgba(255, 255, 255, 0.86);
+  --mac-text-2: rgba(255, 255, 255, 0.5);
+  --mac-sep: rgba(255, 255, 255, 0.12);
+  --mac-wash: rgba(255, 255, 255, 0.08);
+  --mac-button: rgba(255, 255, 255, 0.14);
+  --mac-button-edge: rgba(255, 255, 255, 0.06);
+  --mac-accent: #0a84ff;
+  --mac-selection: #3f638b;
+  --mac-green: #30d158;
+  --mac-red: #ff453a;
 }

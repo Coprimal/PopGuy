@@ -10,6 +10,9 @@ const pages = [
   ["/privacy", "Privacy"]
 ];
 
+// The home page shows the downloads twice (hero and closing call to action): the contracts are checked in the hero.
+const hero = () => within(screen.getByRole("heading", { level: 1 }).closest("section"));
+
 function renderAt(path) {
   render(
     <MemoryRouter initialEntries={[path]}>
@@ -60,21 +63,21 @@ describe("website routes", () => {
   it("shows the macOS and Windows downloads on the home page without a Pro checkout", () => {
     renderAt("/");
 
-    expect(screen.getByRole("link", { name: /Download for macOS/ })).toHaveAttribute(
+    expect(hero().getByRole("link", { name: /Download for macOS/ })).toHaveAttribute(
       "href",
       "https://github.com/Coprimal/PopGuy/releases/latest"
     );
     // A public download contract: the Latest release (macOS and Windows share it) holds the Velopack Setup.exe. jsdom
     // is not a Windows PC, so the button takes x64; every other build is on the release page.
-    expect(screen.getByRole("link", { name: /Download for Windows/ })).toHaveAttribute(
+    expect(hero().getByRole("link", { name: /Download for Windows/ })).toHaveAttribute(
       "href",
       "https://github.com/Coprimal/PopGuy/releases/latest/download/PopGuy-win-x64-Setup.exe"
     );
-    expect(screen.getByRole("link", { name: "other downloads" })).toHaveAttribute(
+    expect(hero().getByRole("link", { name: "All downloads" })).toHaveAttribute(
       "href",
       "https://github.com/Coprimal/PopGuy/releases/latest"
     );
-    expect(screen.getByText(/not code-signed yet/)).toBeInTheDocument();
+    expect(hero().getByText(/unsigned/)).toBeInTheDocument();
     expect(
       screen.queryByText(["Get", "Pro"].join(" "))
     ).not.toBeInTheDocument();
@@ -90,7 +93,7 @@ describe("website routes", () => {
     try {
       renderAt("/");
 
-      const downloads = screen.getAllByRole("link", { name: /^Download for/ });
+      const downloads = hero().getAllByRole("link", { name: /^Download for/ });
       expect(downloads.map((link) => link.textContent)).toEqual(["Download for Windows", "Download for macOS"]);
       expect(downloads[0]).toHaveClass("button--primary");
     } finally {
@@ -116,8 +119,8 @@ describe("website routes", () => {
         await new Promise((resolve) => setTimeout(resolve, 0));
       });
 
-      expect(screen.getByRole("link", { name: /Download for macOS/ })).toHaveClass("button--primary");
-      expect(screen.getByRole("link", { name: /Download for Windows/ }).getAttribute("href")).toMatch(
+      expect(hero().getByRole("link", { name: /Download for macOS/ })).toHaveClass("button--primary");
+      expect(hero().getByRole("link", { name: /Download for Windows/ }).getAttribute("href")).toMatch(
         /PopGuy-win-x64-Setup\.exe$/
       );
     } finally {
@@ -142,16 +145,17 @@ describe("website routes", () => {
 
   it("links the AGPLv3 license and GitHub releases in the footer", () => {
     renderAt("/");
+    const footer = within(screen.getByRole("contentinfo"));
 
-    expect(screen.getByRole("link", { name: "AGPLv3" })).toHaveAttribute(
+    expect(footer.getByRole("link", { name: "AGPLv3" })).toHaveAttribute(
       "href",
       "https://github.com/Coprimal/PopGuy/blob/main/LICENSE"
     );
-    expect(screen.getByRole("link", { name: "Changelog" })).toHaveAttribute(
+    expect(footer.getByRole("link", { name: "Changelog" })).toHaveAttribute(
       "href",
       "https://github.com/Coprimal/PopGuy/releases"
     );
-    expect(screen.getByRole("link", { name: "Privacy" })).toHaveAttribute(
+    expect(footer.getByRole("link", { name: "Privacy" })).toHaveAttribute(
       "href",
       "/privacy"
     );

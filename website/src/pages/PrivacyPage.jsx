@@ -1,3 +1,5 @@
+import { Check, Info } from "lucide-react";
+import { PageHero } from "../components/PageHero";
 import { RichText } from "../components/RichText";
 import { GITHUB_URL } from "../constants";
 
@@ -62,33 +64,56 @@ const sections = [
   }
 ];
 
+const slug = (text) => text.toLowerCase().replace(/[^a-z0-9]+/g, "-");
+
 export function PrivacyPage() {
+  const [summary, ...rest] = sections;
   return (
     <main>
-      <section className="hero">
-        <h1>Privacy</h1>
-        <p>PopGuy is built to keep your text on your Mac.</p>
+      <PageHero kicker="Privacy policy" title="Privacy" lead="PopGuy is built to keep your text on your Mac.">
         <p className="note">Last updated {LAST_UPDATED}</p>
-      </section>
+      </PageHero>
 
-      <div className="docs-content">
-        {sections.map((section) => (
-          <section key={section.title} className="doc">
-            <h2>{section.title}</h2>
-            {section.body ? (
-              <p>
-                <RichText text={section.body} />
-                {section.link ? <><a href={section.link[0]} target="_blank" rel="noreferrer">{section.link[1]}</a>.</> : null}
-              </p>
-            ) : null}
-            {section.notice ? <p className="notice"><RichText text={section.notice} /></p> : null}
-            {section.bullets ? (
-              <ul className="list">
-                {section.bullets.map((item) => <li key={item}><RichText text={item} /></li>)}
-              </ul>
-            ) : null}
+      <div className="container side-layout">
+        <nav className="toc" aria-label="Privacy sections">
+          <p className="toc__title">On this page</p>
+          <ul>
+            {sections.map((section) => (
+              <li key={section.title}><a href={`#${slug(section.title)}`}>{section.title}</a></li>
+            ))}
+          </ul>
+        </nav>
+
+        <div className="prose">
+          <section id={slug(summary.title)} className="doc summary-card">
+            <h2>{summary.title}</h2>
+            <ul className="check-list">
+              {summary.bullets.map((item) => (
+                <li key={item}><Check aria-hidden="true" /><span><RichText text={item} /></span></li>
+              ))}
+            </ul>
           </section>
-        ))}
+
+          {rest.map((section) => (
+            <section key={section.title} id={slug(section.title)} className="doc">
+              <h2>{section.title}</h2>
+              {section.body ? (
+                <p>
+                  <RichText text={section.body} />
+                  {section.link ? <><a href={section.link[0]} target="_blank" rel="noreferrer">{section.link[1]}</a>.</> : null}
+                </p>
+              ) : null}
+              {section.notice ? (
+                <p className="notice"><Info aria-hidden="true" /><span><RichText text={section.notice} /></span></p>
+              ) : null}
+              {section.bullets ? (
+                <ul className="list">
+                  {section.bullets.map((item) => <li key={item}><RichText text={item} /></li>)}
+                </ul>
+              ) : null}
+            </section>
+          ))}
+        </div>
       </div>
     </main>
   );
