@@ -15,6 +15,11 @@ heading, which the release body shows under `## Windows`.
 <!-- Add entries here as you work. On release, rename this to `## [X.Y.Z] - YYYY-MM-DD`
      and start a fresh [Unreleased] section above it. -->
 
+## [1.4.14] - 2026-11-20
+
+### Fixed
+- AI actions: the selected text is now kept apart from the prompt instructions, so a selection that contains instructions or looks like a command is processed as text instead of being obeyed.
+
 ## [1.4.13] - 2026-11-19
 
 ### Added
