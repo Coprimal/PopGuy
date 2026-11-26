@@ -160,6 +160,7 @@ final class ComposerImageStripModel: ObservableObject {
 
     private nonisolated static func existingFiles(among paths: Set<String>) -> Set<String> {
         paths.filter { path in
+            guard ComposerThumbnailLoader.isLocalPath(path) else { return false }
             var isDirectory: ObjCBool = false
             return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && !isDirectory.boolValue
         }

@@ -57,10 +57,26 @@ actor ComposerThumbnailLoader {
 
     // MARK: - Helpers
 
+    /// True for an absolute path that cannot reach the network, checked before any file
+    /// system call: a mention must not trigger an automount or a server lookup. The
+    /// automount trees are refused, and a /Volumes path only passes on a local volume.
+    nonisolated static func isLocalPath(_ path: String) -> Bool {
+        guard path.hasPrefix("/"), !path.hasPrefix("//") else { return false }
+        // Lexical only: ".." cannot step into a refused tree.
+        let standardized = URL(fileURLWithPath: path).standardized.path
+        let refused = ["/net/", "/Network/", "/private/var/automount/", "/var/automount/", "/System/Volumes/"]
+        if refused.contains(where: { standardized.hasPrefix($0) }) { return false }
+        guard standardized.hasPrefix("/Volumes/") else { return true }
+        let parts = standardized.split(separator: "/", maxSplits: 2)
+        guard parts.count == 3 else { return false }
+        let volume = URL(fileURLWithPath: "/Volumes/\(parts[1])", isDirectory: true)
+        return (try? volume.resourceValues(forKeys: [.volumeIsLocalKey]))?.volumeIsLocal == true
+    }
+
     /// The resolved URL and modification date of `path` when it is an absolute path to
     /// a regular file within the size limit (Foundation resource values).
     private nonisolated static func readableFile(_ path: String) -> (url: URL, modified: Date)? {
-        guard path.hasPrefix("/") else { return nil }
+        guard isLocalPath(path) else { return nil }
         let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
         guard let values = try? url.resourceValues(forKeys: keys),
