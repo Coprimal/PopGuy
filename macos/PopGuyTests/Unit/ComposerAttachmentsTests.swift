@@ -56,7 +56,7 @@ struct ComposerAttachmentsTests {
     @Test("previews never touch paths that can reach the network")
     func localPathsOnly() {
         #expect(ComposerThumbnailLoader.isLocalPath("/tmp/x.png"))
-        for path in ["/net/host/x.png", "/Network/Servers/h/x.png", "/Users/a/../../net/h/x.png",
+        for path in ["/net/host/x.png", "/NET/host/x.png", "/Network/Servers/h/x.png", "/VOLUMES/NoSuchVolume-PopGuy/x.png", "/Users/a/../../net/h/x.png",
                      "//host/x.png", "/private/var/automount/x.png", "/Volumes/NoSuchVolume-PopGuy/x.png", "x.png"] {
             #expect(!ComposerThumbnailLoader.isLocalPath(path), "\(path)")
         }

@@ -64,9 +64,11 @@ actor ComposerThumbnailLoader {
         guard path.hasPrefix("/"), !path.hasPrefix("//") else { return false }
         // Lexical only: ".." cannot step into a refused tree.
         let standardized = URL(fileURLWithPath: path).standardized.path
-        let refused = ["/net/", "/Network/", "/private/var/automount/", "/var/automount/", "/System/Volumes/"]
-        if refused.contains(where: { standardized.hasPrefix($0) }) { return false }
-        guard standardized.hasPrefix("/Volumes/") else { return true }
+        // Case-insensitive: the default file system matches "/NET" to "/net".
+        let lower = standardized.lowercased()
+        let refused = ["/net/", "/network/", "/private/var/automount/", "/var/automount/", "/system/volumes/"]
+        if refused.contains(where: { lower.hasPrefix($0) }) { return false }
+        guard lower.hasPrefix("/volumes/") else { return true }
         let parts = standardized.split(separator: "/", maxSplits: 2)
         guard parts.count == 3 else { return false }
         let volume = URL(fileURLWithPath: "/Volumes/\(parts[1])", isDirectory: true)
@@ -78,6 +80,8 @@ actor ComposerThumbnailLoader {
     private nonisolated static func readableFile(_ path: String) -> (url: URL, modified: Date)? {
         guard isLocalPath(path) else { return nil }
         let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        // A link may point into a refused tree.
+        guard isLocalPath(url.path) else { return nil }
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
         guard let values = try? url.resourceValues(forKeys: keys),
               values.isRegularFile == true,
