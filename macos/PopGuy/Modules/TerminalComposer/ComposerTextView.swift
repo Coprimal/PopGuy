@@ -6,6 +6,9 @@
 // formatting), no smart quotes/dashes or autocorrect (prompt and code text).
 //
 // Keys: Cmd+Return → onDone, Cmd+Shift+Return → onDoneAndSubmit, Esc → onCancel.
+// In a CLI session with a command catalog, typing the agent's trigger shows the
+// suggestion list (CommandSuggestionPopup): while it is shown, Up/Down move its
+// selection, Return and Tab accept, and Esc closes only the list.
 // Return and Backspace continue and end Markdown lists, Tab and Shift+Tab indent and
 // outdent list items (ListContinuation). Pasting an image inserts an "@path" mention
 // (ComposerImageStore).
@@ -23,6 +26,8 @@ struct ComposerTextView: NSViewRepresentable {
     var onDone: () -> Void = {}
     var onDoneAndSubmit: () -> Void = {}
     var onCancel: () -> Void = {}
+    /// The CLI session's command catalog; nil shows no suggestions.
+    var suggestionCatalog: ComposerSuggestionCatalog?
 
     static let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize + 1)
 
@@ -89,9 +94,12 @@ struct ComposerTextView: NSViewRepresentable {
         apply(callbacksTo: textView)
         // Push only real external changes, so selection and undo survive normal updates.
         if textView.string != text, !textView.hasMarkedText() {
-            textView.string = text
-            textView.moveCaretToEnd()
+            textView.suggestions.deferringRefresh {
+                textView.string = text
+                textView.moveCaretToEnd()
+            }
         }
+        textView.suggestions.catalog = suggestionCatalog
     }
 
     private func apply(callbacksTo textView: ComposerNSTextView) {
@@ -110,6 +118,11 @@ struct ComposerTextView: NSViewRepresentable {
         func textDidChange(_ notification: Notification) {
             guard let textView = notification.object as? NSTextView else { return }
             parent.text = textView.string
+            (textView as? ComposerNSTextView)?.suggestions.refresh()
+        }
+
+        func textViewDidChangeSelection(_ notification: Notification) {
+            (notification.object as? ComposerNSTextView)?.suggestions.refresh()
         }
 
         /// Attribute changes made here are not registered with the undo manager.
@@ -131,14 +144,62 @@ final class ComposerNSTextView: NSTextView {
     var onDoneAndSubmit: () -> Void = {}
     var onCancel: () -> Void = {}
 
+    /// The command suggestion list of this editor.
+    private(set) lazy var suggestions = CommandSuggestionPopup(textView: self)
+
+    override func viewWillMove(toWindow newWindow: NSWindow?) {
+        if let window {
+            NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: window)
+        }
+        super.viewWillMove(toWindow: newWindow)
+    }
+
     override func viewDidMoveToWindow() {
         super.viewDidMoveToWindow()
         window?.makeFirstResponder(self)
+        if let window {
+            NotificationCenter.default.addObserver(self, selector: #selector(windowWillClose(_:)),
+                                                   name: NSWindow.willCloseNotification, object: window)
+        } else {
+            suggestions.hide()
+        }
     }
 
-    /// Esc (NSTextView would otherwise start completion).
+    @objc private func windowWillClose(_ notification: Notification) {
+        suggestions.hide()
+    }
+
+    /// Focus leaving the editor hides the suggestions; a click on the list keeps the focus here.
+    override func resignFirstResponder() -> Bool {
+        if suggestions.isMouseDownInList(NSApp.currentEvent) { return false }
+        let resigned = super.resignFirstResponder()
+        if resigned { suggestions.hide() }
+        return resigned
+    }
+
+    /// Esc closes the suggestion list, else cancels (NSTextView would otherwise start completion).
     override func cancelOperation(_ sender: Any?) {
+        if suggestions.isVisible {
+            suggestions.hide()
+            return
+        }
         onCancel()
+    }
+
+    override func moveUp(_ sender: Any?) {
+        if suggestions.isVisible {
+            suggestions.moveSelection(by: -1)
+        } else {
+            super.moveUp(sender)
+        }
+    }
+
+    override func moveDown(_ sender: Any?) {
+        if suggestions.isVisible {
+            suggestions.moveSelection(by: 1)
+        } else {
+            super.moveDown(sender)
+        }
     }
 
     /// The caret after the last character, scrolled into view, to go on writing.
@@ -148,8 +209,9 @@ final class ComposerNSTextView: NSTextView {
         scrollRangeToVisible(end)
     }
 
-    /// Return continues or ends a Markdown list (ListContinuation).
+    /// Return accepts the selected suggestion, else continues or ends a Markdown list (ListContinuation).
     override func insertNewline(_ sender: Any?) {
+        if suggestions.acceptSelected() { return }
         if !applyListEdit(ListContinuation.returnEdit) { super.insertNewline(sender) }
     }
 
@@ -158,8 +220,9 @@ final class ComposerNSTextView: NSTextView {
         if !applyListEdit(ListContinuation.backspaceEdit) { super.deleteBackward(sender) }
     }
 
-    /// Tab on a list item indents it one level.
+    /// Tab accepts the selected suggestion, else indents a list item one level.
     override func insertTab(_ sender: Any?) {
+        if suggestions.acceptSelected() { return }
         if !applyListEdit(ListContinuation.indentEdit) { super.insertTab(sender) }
     }
 
@@ -199,10 +262,12 @@ final class ComposerNSTextView: NSTextView {
         let modifiers = event.modifierFlags.intersection([.command, .shift, .option, .control])
         let isReturn = event.keyCode == 36 || event.keyCode == 76 // Return, keypad Enter
         if isReturn, modifiers == [.command] {
+            suggestions.hide()
             onDone()
             return true
         }
         if isReturn, modifiers == [.command, .shift] {
+            suggestions.hide()
             onDoneAndSubmit()
             return true
         }

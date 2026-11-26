@@ -9,6 +9,7 @@ using Microsoft.UI.Xaml;
 using Microsoft.UI.Xaml.Automation;
 using Microsoft.UI.Xaml.Controls;
 using Microsoft.UI.Xaml.Input;
+using Microsoft.UI.Xaml.Media;
 using PopGuy.Controls;
 using PopGuy.Core.Composer;
 using PopGuy.Platform.Capture;
@@ -27,7 +28,9 @@ namespace PopGuy.Composer;
 /// <see cref="RichEditBox"/> (paste and copy are plain text) with simple Markdown highlighting from
 /// <see cref="MarkdownHighlighter"/>: a heading line bold at the base size, code monospace on a subtle background,
 /// bold and italic as their traits, list markers and fence lines dimmed. Keys: Ctrl+Enter Done, Ctrl+Shift+Enter Done
-/// &amp; Submit, Esc Cancel (closes the find bar first), Ctrl+F find; Tab / Shift+Tab indent / outdent a list item.
+/// &amp; Submit, Esc Cancel (closes the suggestions, then the find bar first), Ctrl+F find; Tab / Shift+Tab indent /
+/// outdent a list item. In a CLI session, a command or skill typed with its trigger ("/" or "$") shows the CLI's matching
+/// <see cref="CatalogItem"/>s at the caret (<see cref="CommandSuggestions"/>): Up/Down select, Enter/Tab or a click accept.
 /// Pasting an image (or copied image files) inserts "@path" mentions (<see cref="ComposerImageStore"/>). Unlike the toolbar, the composer takes the
 /// foreground. One window per session: the controller makes it, answers its requests and closes it with
 /// <see cref="CloseComposer"/>. The text is never logged. UI thread only.
@@ -68,6 +71,34 @@ public sealed partial class ComposerWindow : Window
     private bool _placed;
     private bool _closingByCode;
     private bool _closed;
+
+    /// <summary>The CLI's agent and its commands and skills (<see cref="SetCatalog"/>); none until it arrives.</summary>
+    private string? _catalogAgent;
+    private IReadOnlyList<CatalogItem> _catalogItems = [];
+
+    /// <summary>The suggestion list's geometry (DIPs): fixed, so placing it never waits for a layout pass.</summary>
+    private const double SuggestionRowHeight = 32;
+    private const int SuggestionVisibleRows = 6;
+    private const double SuggestionWidth = 420;
+    private const double SuggestionChrome = 10; // The popup's padding (4) and border (1), both sides.
+    private const double SuggestionGap = 4;
+    private const double SuggestionEdgeMargin = 8;
+    private const double SuggestionTextInset = 17; // The popup's padding and border (5) and the name's margin (12).
+
+    /// <summary>The token the shown list is for, its items and the selected row; null token: the list is hidden.</summary>
+    private CommandSuggestions.Token? _suggestionToken;
+    private IReadOnlyList<CatalogItem> _suggestions = [];
+    private List<Grid> _suggestionRows = [];
+    private int _suggestionIndex;
+
+    /// <summary>The token Esc closed the list for: it stays closed until the token changes.</summary>
+    private CommandSuggestions.Token? _dismissedToken;
+
+    /// <summary>An IME composition is in progress: no suggestions.</summary>
+    private bool _composing;
+
+    /// <summary>The editor's own scroll viewer (its template's), for the caret's place while scrolled.</summary>
+    private ScrollViewer? _editorScroll;
 
     /// <summary>Where pasted images are saved (null: images paste as nothing, as before).</summary>
     public ComposerImageStore? ImageStore { get; set; }
@@ -111,9 +142,14 @@ public sealed partial class ComposerWindow : Window
         Editor.Paste += OnEditorPaste;
         Editor.PreviewKeyDown += OnEditorPreviewKeyDown;
         Editor.Loaded += OnEditorLoaded;
+        Editor.SelectionChanged += OnEditorSelectionChanged;
+        Editor.TextCompositionStarted += OnEditorCompositionStarted;
+        Editor.TextCompositionEnded += OnEditorCompositionEnded;
+        Editor.SizeChanged += OnEditorSizeChanged;
         RootGrid.PreviewKeyDown += OnRootPreviewKeyDown;
         RootGrid.ActualThemeChanged += OnActualThemeChanged;
         AppWindow.Closing += OnAppWindowClosing;
+        Activated += OnActivated;
         Closed += OnClosed;
 
         UpdateFooter();
@@ -236,6 +272,15 @@ public sealed partial class ComposerWindow : Window
         }
     }
 
+    /// <summary>The calling CLI's commands and skills, for the suggestions (CLI sessions only).</summary>
+    public void SetCatalog(string agent, IReadOnlyList<CatalogItem> items)
+    {
+        _catalogAgent = agent;
+        _catalogItems = items;
+        // A catalog that arrives after the token was typed shows its list at once.
+        RefreshSuggestions();
+    }
+
     // Show and close.
 
     /// <summary>
@@ -292,11 +337,17 @@ public sealed partial class ComposerWindow : Window
         Editor.Paste -= OnEditorPaste;
         Editor.PreviewKeyDown -= OnEditorPreviewKeyDown;
         Editor.Loaded -= OnEditorLoaded;
+        Editor.SelectionChanged -= OnEditorSelectionChanged;
+        Editor.TextCompositionStarted -= OnEditorCompositionStarted;
+        Editor.TextCompositionEnded -= OnEditorCompositionEnded;
+        Editor.SizeChanged -= OnEditorSizeChanged;
+        if (_editorScroll is not null) _editorScroll.ViewChanged -= OnEditorViewChanged;
         FindBox.PreviewKeyDown -= OnFindBoxPreviewKeyDown;
         FindBox.TextChanged -= OnFindBoxTextChanged;
         RootGrid.PreviewKeyDown -= OnRootPreviewKeyDown;
         RootGrid.ActualThemeChanged -= OnActualThemeChanged;
         AppWindow.Closing -= OnAppWindowClosing;
+        Activated -= OnActivated;
         Closed -= OnClosed;
     }
 
@@ -352,7 +403,21 @@ public sealed partial class ComposerWindow : Window
         Editor.Focus(FocusState.Programmatic);
     }
 
-    private void OnEditorLoaded(object sender, RoutedEventArgs e) => Editor.Focus(FocusState.Programmatic);
+    private void OnEditorLoaded(object sender, RoutedEventArgs e)
+    {
+        Editor.Focus(FocusState.Programmatic);
+        if (_editorScroll is null && FindScrollViewer(Editor) is { } scroll)
+        {
+            _editorScroll = scroll;
+            scroll.ViewChanged += OnEditorViewChanged;
+        }
+    }
+
+    /// <summary>Another app took the foreground: the suggestions close.</summary>
+    private void OnActivated(object sender, WindowActivatedEventArgs args)
+    {
+        if (args.WindowActivationState == WindowActivationState.Deactivated) HideSuggestions();
+    }
 
     // Footer.
 
@@ -397,7 +462,11 @@ public sealed partial class ComposerWindow : Window
         HoverTooltip.SetText(button, text);
     }
 
-    private void OnCancelClick(object sender, RoutedEventArgs e) => CancelRequested?.Invoke();
+    private void OnCancelClick(object sender, RoutedEventArgs e)
+    {
+        HideSuggestions();
+        CancelRequested?.Invoke();
+    }
 
     private void OnDoneClick(object sender, RoutedEventArgs e) => Done();
 
@@ -411,6 +480,7 @@ public sealed partial class ComposerWindow : Window
     /// </summary>
     private void Done()
     {
+        HideSuggestions();
         var text = Text;
         if (CopyOnly)
         {
@@ -428,6 +498,7 @@ public sealed partial class ComposerWindow : Window
 
     private void DoneAndSubmit()
     {
+        HideSuggestions();
         if (CopyOnly || !_canSubmit) return;
         if (Encoding.UTF8.GetByteCount(Text) > ComposerMessage.MaxTextBytes)
         {
@@ -456,7 +527,8 @@ public sealed partial class ComposerWindow : Window
         else if (e.Key == VirtualKey.Escape)
         {
             e.Handled = true;
-            if (FindBar.Visibility == Visibility.Visible) CloseFind();
+            if (SuggestionsVisible) DismissSuggestions();
+            else if (FindBar.Visibility == Visibility.Visible) CloseFind();
             else CancelRequested?.Invoke();
         }
         else if (e.Key == VirtualKey.F && control && !shift)
@@ -467,12 +539,19 @@ public sealed partial class ComposerWindow : Window
     }
 
     /// <summary>
-    /// Enter and Backspace continue and end Markdown lists, Tab and Shift+Tab indent and outdent list items. Undo and
-    /// redo step over the format passes (they leave the text as it was), so one key is one edit.
+    /// While the suggestions show, Up and Down select and Enter and Tab accept (without modifiers). Enter and Backspace
+    /// continue and end Markdown lists, Tab and Shift+Tab indent and outdent list items. Undo and redo step over the
+    /// format passes (they leave the text as it was), so one key is one edit.
     /// </summary>
     private void OnEditorPreviewKeyDown(object sender, KeyRoutedEventArgs e)
     {
         var shift = IsDown(VirtualKey.Shift);
+        if (SuggestionsVisible && !shift && !IsDown(VirtualKey.Control) && !IsDown(VirtualKey.Menu)
+            && HandleSuggestionKey(e.Key))
+        {
+            e.Handled = true;
+            return;
+        }
         if (!IsDown(VirtualKey.Control))
         {
             if (IsDown(VirtualKey.Menu)) return;
@@ -631,6 +710,7 @@ public sealed partial class ComposerWindow : Window
         if (_formatting || _closed) return;
         _highlightTimer.Stop();
         _highlightTimer.Start();
+        RefreshSuggestions();
     }
 
     private void OnHighlightTick(DispatcherQueueTimer sender, object args)
@@ -754,10 +834,257 @@ public sealed partial class ComposerWindow : Window
         return Color.FromArgb(255, Mix(top.R, bottom.R), Mix(top.G, bottom.G), Mix(top.B, bottom.B));
     }
 
+    // Command suggestions: the calling CLI's commands and skills for the token at the caret.
+
+    private bool SuggestionsVisible => _suggestionToken is not null;
+
+    private void OnEditorSelectionChanged(object sender, RoutedEventArgs e)
+    {
+        if (_formatting || _closed) return;
+        RefreshSuggestions();
+    }
+
+    private void OnEditorCompositionStarted(RichEditBox sender, TextCompositionStartedEventArgs args)
+    {
+        _composing = true;
+        HideSuggestions();
+    }
+
+    private void OnEditorCompositionEnded(RichEditBox sender, TextCompositionEndedEventArgs args)
+    {
+        _composing = false;
+        RefreshSuggestions();
+    }
+
+    private void OnEditorSizeChanged(object sender, SizeChangedEventArgs e)
+    {
+        if (SuggestionsVisible) PositionSuggestions();
+    }
+
+    /// <summary>A wheel scroll, or the editor following the caret, moves the caret's line: the list follows it.</summary>
+    private void OnEditorViewChanged(object? sender, ScrollViewerViewChangedEventArgs e)
+    {
+        if (SuggestionsVisible) PositionSuggestions();
+    }
+
+    /// <summary>The token at the caret for the catalog's agent; null without a catalog or triggers, or with a selection.</summary>
+    private CommandSuggestions.Token? CurrentToken()
+    {
+        if (_catalogAgent is null || _catalogItems.Count == 0) return null;
+        var (triggers, slashOnlyAtStart) = CommandSuggestions.Triggers(_catalogAgent);
+        if (triggers.Count == 0) return null;
+        var selection = Editor.TextDocument.Selection;
+        if (selection.StartPosition != selection.EndPosition) return null;
+        // The editor's indices: "\r" and "\v" line breaks are whitespace to the token.
+        return CommandSuggestions.ActiveToken(RawText(), selection.StartPosition, triggers, slashOnlyAtStart);
+    }
+
+    /// <summary>
+    /// Shows the items whose name matches the token at the caret, or hides the list: no token, no match, an IME
+    /// composition, or the token Esc closed the list for. The selection goes back to the first row when the token changes.
+    /// </summary>
+    private void RefreshSuggestions()
+    {
+        if (_closed) return;
+        var token = _composing ? null : CurrentToken();
+        if (token is null || token != _dismissedToken) _dismissedToken = null;
+        if (token is not { } current || _dismissedToken is not null)
+        {
+            HideSuggestions();
+            return;
+        }
+        var items = CommandSuggestions.Rank(_catalogItems, current.Trigger, current.Query);
+        if (items.Count == 0)
+        {
+            HideSuggestions();
+            return;
+        }
+        var rebuild = !SuggestionsVisible || !items.SequenceEqual(_suggestions);
+        if (_suggestionToken != current) _suggestionIndex = 0;
+        _suggestionToken = current;
+        _suggestions = items;
+        _suggestionIndex = Math.Clamp(_suggestionIndex, 0, items.Count - 1);
+        if (rebuild) BuildSuggestionRows();
+        else UpdateSuggestionSelection(scrollToTop: false);
+        SuggestionPopup.Visibility = Visibility.Visible;
+        PositionSuggestions();
+    }
+
+    /// <summary>One row per item: the name, then the description, both plain text (TextBlock.Text is never markup).</summary>
+    private void BuildSuggestionRows()
+    {
+        var highlightStyle = (Style)RootGrid.Resources["SuggestionHighlightStyle"];
+        var pillStyle = (Style)RootGrid.Resources["SuggestionPillStyle"];
+        var nameStyle = (Style)RootGrid.Resources["SuggestionNameStyle"];
+        var descriptionStyle = (Style)RootGrid.Resources["SuggestionDescriptionStyle"];
+        var rows = new List<Grid>(_suggestions.Count);
+        for (var i = 0; i < _suggestions.Count; i++)
+        {
+            var item = _suggestions[i];
+            // A transparent background, so the whole row takes the pointer.
+            var row = new Grid
+            {
+                Height = SuggestionRowHeight,
+                Background = new SolidColorBrush(Colors.Transparent),
+                AllowFocusOnInteraction = false,
+                IsTabStop = false,
+                Tag = i,
+            };
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = GridLength.Auto });
+            row.ColumnDefinitions.Add(new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) });
+            var highlight = new Border { Style = highlightStyle };
+            Grid.SetColumnSpan(highlight, 2);
+            row.Children.Add(highlight);
+            row.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle { Style = pillStyle });
+            row.Children.Add(new TextBlock { Style = nameStyle, Text = item.Name });
+            var description = new TextBlock { Style = descriptionStyle, Text = item.Description };
+            Grid.SetColumn(description, 1);
+            row.Children.Add(description);
+            AutomationProperties.SetName(row, item.Name);
+            row.PointerPressed += OnSuggestionRowPointerPressed;
+            rows.Add(row);
+        }
+        _suggestionRows = rows;
+        SuggestionScroll.Height = Math.Min(rows.Count, SuggestionVisibleRows) * SuggestionRowHeight;
+        SuggestionList.ItemsSource = rows;
+        UpdateSuggestionSelection(scrollToTop: true);
+    }
+
+    /// <summary>Highlights the selected row and scrolls the list to keep it in view.</summary>
+    private void UpdateSuggestionSelection(bool scrollToTop)
+    {
+        for (var i = 0; i < _suggestionRows.Count; i++)
+        {
+            var visibility = i == _suggestionIndex ? Visibility.Visible : Visibility.Collapsed;
+            _suggestionRows[i].Children[0].Visibility = visibility;
+            _suggestionRows[i].Children[1].Visibility = visibility;
+        }
+        var visible = Math.Min(_suggestionRows.Count, SuggestionVisibleRows) * SuggestionRowHeight;
+        var offset = scrollToTop ? 0 : SuggestionScroll.VerticalOffset;
+        var top = _suggestionIndex * SuggestionRowHeight;
+        if (top < offset) offset = top;
+        else if (top + SuggestionRowHeight > offset + visible) offset = top + SuggestionRowHeight - visible;
+        SuggestionScroll.ChangeView(null, offset, null, true);
+    }
+
+    /// <summary>Up and Down move the selection (wrapping), Enter and Tab accept it; false: the key does its own thing.</summary>
+    private bool HandleSuggestionKey(VirtualKey key)
+    {
+        if (key is VirtualKey.Up or VirtualKey.Down)
+        {
+            var count = _suggestions.Count;
+            _suggestionIndex = (_suggestionIndex + (key == VirtualKey.Down ? 1 : count - 1)) % count;
+            UpdateSuggestionSelection(scrollToTop: false);
+            return true;
+        }
+        if (key is VirtualKey.Enter or VirtualKey.Tab) return TryAcceptSuggestion();
+        return false;
+    }
+
+    /// <summary>
+    /// The selected item replaces the token at the caret ("&lt;trigger&gt;&lt;name&gt; ") with the caret after it, through
+    /// the same range edit as <see cref="ApplyListEdit"/>: one RichEdit undo step, so <see cref="StepHistory"/> undoes it
+    /// in one go. False when the token changed since the list was shown (the list is refreshed instead).
+    /// </summary>
+    private bool TryAcceptSuggestion()
+    {
+        if (CurrentToken() is not { } token || token != _suggestionToken || _suggestionIndex >= _suggestions.Count)
+        {
+            RefreshSuggestions();
+            return false;
+        }
+        var edit = CommandSuggestions.AcceptEdit(token, _suggestions[_suggestionIndex]);
+        HideSuggestions();
+        var document = Editor.TextDocument;
+        var range = document.GetRange(edit.Start, edit.Start + edit.Length);
+        range.SetText(TextSetOptions.None, edit.Text);
+        document.Selection.SetRange(range.EndPosition, range.EndPosition);
+        return true;
+    }
+
+    /// <summary>A press on a row accepts it; the editor keeps the keyboard focus.</summary>
+    private void OnSuggestionRowPointerPressed(object sender, PointerRoutedEventArgs e)
+    {
+        if (sender is not Grid { Tag: int index } row || !e.GetCurrentPoint(row).Properties.IsLeftButtonPressed) return;
+        e.Handled = true;
+        if (index < _suggestions.Count)
+        {
+            _suggestionIndex = index;
+            TryAcceptSuggestion();
+        }
+        Editor.Focus(FocusState.Programmatic);
+    }
+
+    /// <summary>Esc: the list closes and stays closed for this token (a format pass or a caret event does not reopen it).</summary>
+    private void DismissSuggestions()
+    {
+        _dismissedToken = _suggestionToken;
+        HideSuggestions();
+    }
+
+    private void HideSuggestions()
+    {
+        if (_suggestionToken is null) return;
+        _suggestionToken = null;
+        SuggestionPopup.Visibility = Visibility.Collapsed;
+    }
+
+    /// <summary>
+    /// The list under the caret's line (over it when there is less room below), its names lined up with the trigger,
+    /// inside the editor. A text range's rect (<see cref="PointOptions.None"/>) is in DIPs from the top left of the
+    /// editor's text inside its padding, unscrolled: as CommunityToolkit's RichSuggestBox reads it, adding the padding
+    /// and taking off the editor's scroll offsets gives the editor's own coordinates.
+    /// </summary>
+    private void PositionSuggestions()
+    {
+        if (_suggestionToken is not { } token) return;
+        var width = SuggestionCanvas.ActualWidth;
+        var height = SuggestionCanvas.ActualHeight;
+        if (width <= 0 || height <= 0) return;
+        var document = Editor.TextDocument;
+        document.Selection.GetRect(PointOptions.None, out var caret, out _);
+        document.GetRange(token.Start, token.Start).GetRect(PointOptions.None, out var start, out _);
+        var padding = Editor.Padding;
+        var border = Editor.BorderThickness;
+        var origin = Editor.TransformToVisual(SuggestionCanvas).TransformPoint(new Windows.Foundation.Point(
+            border.Left + padding.Left - (_editorScroll?.HorizontalOffset ?? 0),
+            border.Top + padding.Top - (_editorScroll?.VerticalOffset ?? 0)));
+        var lineTop = origin.Y + caret.Y;
+        var lineBottom = lineTop + (caret.Height > 0 ? caret.Height : Editor.FontSize * 1.33);
+
+        var popupWidth = Math.Min(SuggestionWidth, Math.Max(0, width - 2 * SuggestionEdgeMargin));
+        var popupHeight = Math.Min(_suggestions.Count, SuggestionVisibleRows) * SuggestionRowHeight + SuggestionChrome;
+        var roomBelow = height - lineBottom - SuggestionGap;
+        var roomAbove = lineTop - SuggestionGap;
+        var top = roomBelow >= popupHeight || roomBelow >= roomAbove
+            ? lineBottom + SuggestionGap
+            : lineTop - SuggestionGap - popupHeight;
+        top = Math.Clamp(top, 0, Math.Max(0, height - popupHeight));
+        var left = Math.Clamp(origin.X + start.X - SuggestionTextInset,
+            SuggestionEdgeMargin, Math.Max(SuggestionEdgeMargin, width - popupWidth - SuggestionEdgeMargin));
+
+        SuggestionPopup.Width = popupWidth;
+        Canvas.SetLeft(SuggestionPopup, left);
+        Canvas.SetTop(SuggestionPopup, top);
+    }
+
+    /// <summary>The first scroll viewer in <paramref name="parent"/>'s visual tree (a RichEditBox's template has one).</summary>
+    private static ScrollViewer? FindScrollViewer(DependencyObject parent)
+    {
+        for (var i = 0; i < VisualTreeHelper.GetChildrenCount(parent); i++)
+        {
+            var child = VisualTreeHelper.GetChild(parent, i);
+            if (child is ScrollViewer scroll) return scroll;
+            if (FindScrollViewer(child) is { } found) return found;
+        }
+        return null;
+    }
+
     // Find: case-insensitive, wraps around, selects the match.
 
     private void OpenFind()
     {
+        HideSuggestions();
         FindBar.Visibility = Visibility.Visible;
         FindStatus.Visibility = Visibility.Collapsed;
         FindBox.Focus(FocusState.Programmatic);

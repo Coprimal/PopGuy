@@ -83,6 +83,7 @@ internal sealed class ComposerController
         _server = new ComposerPipeServer(dispatcher, log);
         _server.SessionOpened += OnSessionOpened;
         _server.SessionEnded += OnSessionEnded;
+        _server.CatalogReceived += OnCatalogReceived;
         _server.BusyRejected += BringForward;
     }
 
@@ -435,6 +436,14 @@ internal sealed class ComposerController
             _log($"composer: session {session.Id} ended while open");
             open.Window.SessionEnded = true;
         }
+    }
+
+    /// <summary>The CLI's commands and skills: only for the open composer of that session. Logs the agent and count only.</summary>
+    private void OnCatalogReceived(ComposerSession session, string agent, IReadOnlyList<CatalogItem> items)
+    {
+        if (_open is not { Session: { } current } open || current != session) return;
+        _log($"composer: session {session.Id} catalog ({agent}, {items.Count} items)");
+        open.Window.SetCatalog(agent, items);
     }
 
     private async Task AutoSubmitAsync(nint source)

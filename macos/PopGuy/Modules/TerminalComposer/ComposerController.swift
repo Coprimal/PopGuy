@@ -131,6 +131,7 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         model.noTarget = compose?.noTarget ?? false
         model.pasteTargetName = compose?.targetName
         model.draftAvailable = false
+        model.suggestionCatalog = nil
         // One window is reused: drop the previous composer's undo history.
         window.undoManager?.removeAllActions()
         autosave = model.$text.dropFirst().sink { [weak self] newText in
@@ -254,6 +255,7 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         autosave = nil
         state = .idle
         model.draftAvailable = false
+        model.suggestionCatalog = nil
         window.close()
     }
 
@@ -304,6 +306,13 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         open(text: text, sourceAppName: source?.localizedName, draftID: draftID)
     }
 
+    func composerServer(_ server: ComposerServer, didReceiveCatalog agent: String,
+                        items: [ComposerCatalogItem], for session: ComposerSession) {
+        guard case .cli(let current, _, _) = state, current == session else { return }
+        model.suggestionCatalog = ComposerSuggestionCatalog(agent: agent, items: items)
+        Self.log.info("Composer: catalog received (agent \(agent, privacy: .public), \(items.count) items)")
+    }
+
     func composerServer(_ server: ComposerServer, sessionDidEnd session: ComposerSession, delivered: Bool) {
         if let delivery = awaitingEnd.removeValue(forKey: session) {
             guard delivered else {
@@ -326,6 +335,7 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         guard case .cli(let current, _, _) = state, current == session else { return }
         Self.log.info("Composer: session ended while open")
         model.sessionEnded = true
+        model.suggestionCatalog = nil
     }
 
     func composerServerDidRejectBusy(_ server: ComposerServer) {

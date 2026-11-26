@@ -11,6 +11,12 @@ import AppKit
 import Combine
 import SwiftUI
 
+/// The calling agent's commands, offered as suggestions in a CLI session.
+nonisolated struct ComposerSuggestionCatalog: Equatable, Sendable {
+    let agent: String
+    let items: [ComposerCatalogItem]
+}
+
 /// State and callbacks of one composer window. The buttons and the editor's
 /// keyboard shortcuts call the same callbacks.
 @MainActor
@@ -26,6 +32,8 @@ final class ComposerModel: ObservableObject {
     @Published var noTarget = false
     /// An older draft exists; shows "Restore draft".
     @Published var draftAvailable = false
+    /// The CLI session's command catalog, once the client sent it; nil otherwise.
+    @Published var suggestionCatalog: ComposerSuggestionCatalog?
 
     var onDone: () -> Void = {}
     var onDoneAndSubmit: () -> Void = {}
@@ -59,7 +67,8 @@ struct ComposerView: View {
                 text: $model.text,
                 onDone: done,
                 onDoneAndSubmit: doneAndSubmit,
-                onCancel: { model.onCancel() }
+                onCancel: { model.onCancel() },
+                suggestionCatalog: model.suggestionCatalog
             )
             .frame(minWidth: 320, maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
             Divider()

@@ -2,8 +2,9 @@
 //
 // Terminal Composer socket server: listens on a same-user Unix domain socket (POSIX
 // sockets driven by Dispatch sources) for the popguy-edit CLI, which sends one "open"
-// line and waits for one reply line; after a "done" reply it sends "written" once the
-// file is written. One composer session is active at a time.
+// line (and at most one optional "catalog" line after it) and waits for one reply line;
+// after a "done" reply it sends "written" once the file is written. One composer session
+// is active at a time.
 // Prompt text is never logged; only lengths and states.
 
 import Foundation
@@ -19,6 +20,10 @@ nonisolated struct ComposerSession: Hashable, Sendable {
 protocol ComposerServerDelegate: AnyObject {
     /// A client opened a session. Answer it once with `ComposerServer.reply(_:to:)`.
     func composerServer(_ server: ComposerServer, didOpen session: ComposerSession, text: String, fileName: String)
+    /// The client sent the calling agent's command catalog before the reply. Fires at most
+    /// once per session, always after its `didOpen` and before its `sessionDidEnd`.
+    func composerServer(_ server: ComposerServer, didReceiveCatalog agent: String,
+                        items: [ComposerCatalogItem], for session: ComposerSession)
     /// The session's connection closed: the client exited (also after a "done" reply, which
     /// is how the owner times auto-submit), failed, the server closed it after a "cancel",
     /// "busy" or "error" reply, or the server stopped. `delivered` is true only when the
@@ -57,6 +62,8 @@ nonisolated final class ComposerServer: @unchecked Sendable {
         var input: [UInt8] = []
         /// The client sent "written" after the "done" reply.
         var delivered = false
+        /// A valid "catalog" was delivered; later ones are ignored.
+        var catalogReceived = false
 
         init(id: Int, fd: Int32, source: any DispatchSourceRead) {
             self.id = id
@@ -207,8 +214,12 @@ nonisolated final class ComposerServer: @unchecked Sendable {
             connection.input.append(contentsOf: chunk[0..<count])
             if let newline = connection.input[searchStart...].firstIndex(of: 0x0A) {
                 let line = Data(connection.input[..<newline])
-                connection.input = []
+                // Keep what follows the open line: a catalog may arrive in the same read.
+                connection.input.removeSubrange(...newline)
                 handleFirstLine(line, on: connection)
+                if case .session(let session, replied: false) = connection.state {
+                    readSessionLines(on: connection, session: session, searchStart: 0)
+                }
             } else if connection.input.count > ComposerMessage.maxLineBytes {
                 connection.input = []
                 Self.log.error("Composer: request line exceeds the size cap")
@@ -225,9 +236,35 @@ nonisolated final class ComposerServer: @unchecked Sendable {
                 }
             }
             if connection.input.count > ComposerMessage.maxLineBytes { connection.input = [] }
-        case .session(_, replied: false):
-            // Nothing is expected before the reply; drained and ignored.
-            break
+        case .session(let session, replied: false):
+            // Before the reply only a "catalog" line is used; other lines are ignored.
+            let searchStart = connection.input.count
+            connection.input.append(contentsOf: chunk[0..<count])
+            readSessionLines(on: connection, session: session, searchStart: searchStart)
+        }
+    }
+
+    /// Handles every complete line buffered before the reply. `searchStart` is where the new
+    /// bytes begin (the rest was already searched for a newline). A first valid "catalog" is
+    /// forwarded; anything else is ignored. An unterminated line past the size cap ends the
+    /// session with an error, like an oversized first line.
+    private func readSessionLines(on connection: Connection, session: ComposerSession, searchStart: Int) {
+        var searchStart = searchStart
+        while let newline = connection.input[searchStart...].firstIndex(of: 0x0A) {
+            let line = Data(connection.input[..<newline])
+            connection.input.removeSubrange(...newline)
+            searchStart = 0
+            guard !connection.catalogReceived,
+                  case .catalog(let agent, let items)? = try? ComposerMessage.decodeLine(line) else { continue }
+            connection.catalogReceived = true
+            notify { server, delegate in
+                delegate.composerServer(server, didReceiveCatalog: agent, items: items, for: session)
+            }
+        }
+        if connection.input.count > ComposerMessage.maxLineBytes {
+            connection.input = []
+            Self.log.error("Composer: session line exceeds the size cap")
+            send(.error(reason: "Request is too large."), on: connection, thenClose: true)
         }
     }
 

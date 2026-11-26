@@ -11,7 +11,8 @@ internal readonly record struct ComposerSession(long Id);
 /// <summary>
 /// Terminal Composer pipe server (macOS ComposerServer): listens on the same-user named pipe
 /// <c>PopGuy-Composer-&lt;user SID&gt;</c> for popguy-edit.exe, which sends one "open" line and waits for one reply
-/// line; after a "done" reply it sends "written" once the file is written. One composer session is active at a time: a
+/// line; after a "done" reply it sends "written" once the file is written. Before the reply it may send one "catalog"
+/// line (its commands and skills, for the composer's suggestions). One composer session is active at a time: a
 /// second "open" is answered "busy" and closed, so one unconnected pipe instance is always listening, also while a
 /// session is open. Pipe I/O runs on the thread pool; the events are raised on the UI thread, in the order they
 /// happened. UNTRUSTED DATA: the prompt text is never logged, only lengths and states.
@@ -30,6 +31,8 @@ internal sealed class ComposerPipeServer(DispatcherQueue dispatcher, Action<stri
         /// <summary>The reply was "done", so a "written" line marks the session delivered.</summary>
         public bool AwaitsWritten { get; set; }
         public bool Delivered { get; set; }
+        /// <summary>The session's catalog was raised: later ones are ignored.</summary>
+        public bool CatalogRaised { get; set; }
     }
 
     /// <summary>Per user: the CLI connects to <c>PopGuy-Composer-&lt;its user SID&gt;</c>.</summary>
@@ -53,6 +56,12 @@ internal sealed class ComposerPipeServer(DispatcherQueue dispatcher, Action<stri
     /// <see cref="SessionOpened"/>; afterwards replies to it are ignored. UI thread.
     /// </summary>
     public event Action<ComposerSession, bool>? SessionEnded;
+
+    /// <summary>
+    /// The active session's client sent its catalog (agent and items) before the reply. Raised at most once per session,
+    /// between its <see cref="SessionOpened"/> and <see cref="SessionEnded"/>. UI thread.
+    /// </summary>
+    public event Action<ComposerSession, string, IReadOnlyList<CatalogItem>>? CatalogReceived;
 
     /// <summary>A second "open" arrived while a session was active; the server answers "busy" and closes it. UI thread.</summary>
     public event Action? BusyRejected;
@@ -197,8 +206,8 @@ internal sealed class ComposerPipeServer(DispatcherQueue dispatcher, Action<stri
 
     /// <summary>
     /// Reads "\n"-framed lines, capped at <see cref="ComposerMessage.MaxLineBytes"/>. The first line must be "open";
-    /// afterwards only "written" (after a "done" reply) matters and the rest is ignored. Ends when the client closes
-    /// the pipe or the server disposes it.
+    /// afterwards only "written" (after a "done" reply) and the first "catalog" (before the reply) matter and the rest,
+    /// lines that fail to decode included, is ignored. Ends when the client closes the pipe or the server disposes it.
     /// </summary>
     private async Task RunConnectionAsync(Connection connection)
     {
@@ -223,6 +232,7 @@ internal sealed class ComposerPipeServer(DispatcherQueue dispatcher, Action<stri
                     if (opened)
                     {
                         if (message is ComposerMessage.Written) MarkDelivered(connection);
+                        else if (message is ComposerMessage.Catalog catalog) RaiseCatalog(connection, catalog);
                         continue;
                     }
                     if (!await OpenAsync(connection, message, length).ConfigureAwait(false)) return;
@@ -296,6 +306,18 @@ internal sealed class ComposerPipeServer(DispatcherQueue dispatcher, Action<stri
         lock (_gate)
         {
             if (connection.AwaitsWritten) connection.Delivered = true;
+        }
+    }
+
+    /// <summary>Raises <see cref="CatalogReceived"/> for the active session's first catalog before its reply; else ignores it.</summary>
+    private void RaiseCatalog(Connection connection, ComposerMessage.Catalog catalog)
+    {
+        lock (_gate)
+        {
+            if (_active != connection || connection.Replied || connection.CatalogRaised) return;
+            connection.CatalogRaised = true;
+            var session = new ComposerSession(connection.Id);
+            Post(() => CatalogReceived?.Invoke(session, catalog.Agent, catalog.Items));
         }
     }
 

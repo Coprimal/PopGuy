@@ -1,8 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     The Terminal Composer window (macOS ComposerWindow.swift + ComposerView.swift): a find bar (hidden until Ctrl+F),
-    the plain-text editor and a footer with the source hint, the notices and the buttons. The editor's highlighting and
-    the keys are in ComposerWindow.xaml.cs.
+    the plain-text editor with the command suggestions over it, and a footer with the source hint, the notices and the
+    buttons. The editor's highlighting, the suggestions and the keys are in ComposerWindow.xaml.cs.
 -->
 <Window
     x:Class="PopGuy.Composer.ComposerWindow"
@@ -12,6 +12,41 @@
 
     <!-- The solid base background, as the Settings window (never Mica, which takes a tint from the wallpaper). -->
     <Grid x:Name="RootGrid" Background="{ThemeResource SolidBackgroundFillColorBaseBrush}">
+        <Grid.Resources>
+            <!-- The suggestion rows (built in code): the selected row's subtle fill and accent pill, as a list's selection. -->
+            <Style x:Key="SuggestionHighlightStyle" TargetType="Border">
+                <Setter Property="Background" Value="{ThemeResource SubtleFillColorSecondaryBrush}" />
+                <Setter Property="CornerRadius" Value="{ThemeResource ControlCornerRadius}" />
+                <Setter Property="IsHitTestVisible" Value="False" />
+            </Style>
+            <Style x:Key="SuggestionPillStyle" TargetType="Rectangle">
+                <Setter Property="Width" Value="3" />
+                <Setter Property="Height" Value="16" />
+                <Setter Property="RadiusX" Value="1.5" />
+                <Setter Property="RadiusY" Value="1.5" />
+                <Setter Property="HorizontalAlignment" Value="Left" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="IsHitTestVisible" Value="False" />
+                <Setter Property="Fill" Value="{ThemeResource AccentFillColorDefaultBrush}" />
+            </Style>
+            <Style x:Key="SuggestionNameStyle" TargetType="TextBlock">
+                <Setter Property="Margin" Value="12,0,12,0" />
+                <Setter Property="MaxWidth" Value="200" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorPrimaryBrush}" />
+                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                <Setter Property="TextWrapping" Value="NoWrap" />
+                <Setter Property="IsHitTestVisible" Value="False" />
+            </Style>
+            <Style x:Key="SuggestionDescriptionStyle" TargetType="TextBlock">
+                <Setter Property="Margin" Value="0,0,12,0" />
+                <Setter Property="VerticalAlignment" Value="Center" />
+                <Setter Property="Foreground" Value="{ThemeResource TextFillColorSecondaryBrush}" />
+                <Setter Property="TextTrimming" Value="CharacterEllipsis" />
+                <Setter Property="TextWrapping" Value="NoWrap" />
+                <Setter Property="IsHitTestVisible" Value="False" />
+            </Style>
+        </Grid.Resources>
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
@@ -94,6 +129,38 @@
                 <StaticResource x:Key="TextControlBorderBrushFocused" ResourceKey="SubtleFillColorTransparentBrush" />
             </RichEditBox.Resources>
         </RichEditBox>
+
+        <!-- The command suggestions (CLI sessions): a list at the caret, placed and filled in code. The canvas has no
+             background, so clicks outside the list reach the editor; nothing in it takes the focus or a tooltip, and
+             the names and descriptions are plain text. -->
+        <Canvas
+            x:Name="SuggestionCanvas"
+            Grid.Row="1"
+            AllowFocusOnInteraction="False"
+            IsTabStop="False">
+            <Border
+                x:Name="SuggestionPopup"
+                Padding="4"
+                AllowFocusOnInteraction="False"
+                Background="{ThemeResource AcrylicInAppFillColorDefaultBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                BorderThickness="1"
+                CornerRadius="{ThemeResource OverlayCornerRadius}"
+                IsTabStop="False"
+                Visibility="Collapsed">
+                <ScrollViewer
+                    x:Name="SuggestionScroll"
+                    AllowFocusOnInteraction="False"
+                    HorizontalScrollBarVisibility="Disabled"
+                    IsTabStop="False"
+                    VerticalScrollBarVisibility="Auto">
+                    <ItemsControl
+                        x:Name="SuggestionList"
+                        AllowFocusOnInteraction="False"
+                        IsTabStop="False" />
+                </ScrollViewer>
+            </Border>
+        </Canvas>
 
         <Grid
             Grid.Row="2"
