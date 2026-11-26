@@ -2,8 +2,8 @@
 // PopGuy
 //
 // The Terminal Composer's image strip: one tile per image mention ("@/abs/path.png")
-// whose file exists, a chip (thumbnail and label) per "[Pasted image #N]" badge known
-// to the session (ComposerPastedImages), plus a chip per CLI "[Image #N]"
+// whose file exists, a thumbnail tile with a name ribbon per "[Pasted image #N]" badge
+// known to the session (ComposerPastedImages), plus a chip per CLI "[Image #N]"
 // placeholder when the session's CLI uses them. A click selects the mention in the
 // editor (and, for a file or a pasted image, opens the enlarged preview, see
 // ComposerImagePreview); the hover x removes it from the text as one undoable edit.
@@ -143,7 +143,7 @@ final class ComposerImageStripModel: ObservableObject {
         items = parsedItems.filter { item in
             switch item.kind {
             case .file(let path): existingPaths.contains(path)
-            // A known badge keeps its chip even when its file is gone ("Can't preview").
+            // A known badge keeps its tile even when its file is gone ("Can't preview").
             case .pastedImage(let number): pastedImages[number] != nil
             case .cliImage: showsClaudeImageTokens
             }
@@ -370,18 +370,10 @@ private struct ComposerImageTile: View {
         case .file(let path):
             thumbnail(path)
         case .pastedImage(let number):
-            HStack(spacing: 8) {
-                thumbnail(model.pastedImages[number])
-                Text("Pasted image #\(number)")
-                    .lineLimit(1)
-                    .foregroundStyle(.secondary)
-                    .padding(.trailing, 10)
-            }
-            .frame(minHeight: Self.size)
-            .background(
-                RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
-                    .fill(.quaternary)
-            )
+            thumbnail(model.pastedImages[number])
+                .overlay(alignment: .bottomTrailing) {
+                    ribbon(number: number)
+                }
         case .cliImage(let number):
             HStack(spacing: 6) {
                 Image(systemName: "photo")
@@ -413,6 +405,26 @@ private struct ComposerImageTile: View {
             }
         }
         .frame(width: Self.size, height: Self.size)
+    }
+
+    /// The badge name on the thumbnail's bottom-trailing corner, clear of the hover x.
+    /// Only the words truncate: the number always shows, to match the badge in the text.
+    private func ribbon(number: Int) -> some View {
+        HStack(spacing: 0) {
+            Text("Pasted image")
+                .lineLimit(1)
+                .truncationMode(.tail)
+            Text(" #\(number)")
+                .lineLimit(1)
+                .fixedSize()
+                .layoutPriority(1)
+        }
+        .font(.system(size: 9, weight: .medium))
+        .foregroundStyle(.white)
+        .padding(.horizontal, 4)
+        .padding(.vertical, 1)
+        .background(Capsule().fill(Color.black.opacity(0.6)))
+        .padding(2)
     }
 
     private var removeButton: some View {

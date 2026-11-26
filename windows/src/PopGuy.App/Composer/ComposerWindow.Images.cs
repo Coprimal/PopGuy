@@ -16,9 +16,9 @@ namespace PopGuy.Composer;
 
 /// <summary>
 /// The composer's image strip and preview (macOS ComposerImageStrip.swift, ComposerImagePreview.swift,
-/// ComposerThumbnailLoader.swift): a 48 px tile per "@path" image mention whose file is a local regular file, a chip with
-/// its thumbnail per "[Pasted image #N]" badge of this session whose file is one too, else with the picture glyph
-/// (<see cref="ComposerPastedImages"/>), plus a chip per CLI
+/// ComposerThumbnailLoader.swift): a 48 px tile per "@path" image mention whose file is a local regular file, a 48 px
+/// tile with its thumbnail and a "Pasted image #N" ribbon per "[Pasted image #N]" badge of this session whose file is one
+/// too, else with the picture glyph (<see cref="ComposerPastedImages"/>), plus a chip per CLI
 /// "[Image #N]" placeholder while <see cref="ShowsClaudeImageTokens"/>. A click selects the mention in the editor (an
 /// image file also opens the in-window preview); the hover x removes it as one undoable edit. Hovering a badge in the
 /// editor shows its full path. Nothing in the strip takes the focus from the editor. Mention paths are checked by
@@ -360,35 +360,18 @@ public sealed partial class ComposerWindow
                 break;
             case ComposerAttachmentKind.PastedImage when entry.LocalPath is { } pastedPath:
                 name = $"Pasted image #{number}";
-                main.Padding = new Thickness(0, 0, 10, 0);
-                main.Content = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 8,
-                    Children =
-                    {
-                        new Border
-                        {
-                            Width = TileSize,
-                            Height = TileSize,
-                            Child = TileThumbnailContent(main, pastedPath),
-                        },
-                        new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center },
-                    },
-                };
+                tile.Width = TileSize;
+                main.Width = TileSize;
+                main.Content = PastedImageContent(TileThumbnailContent(main, pastedPath), number);
                 HoverTooltip.SetText(main, FileTooltip(pastedPath));
                 AutomationProperties.SetName(main, name);
                 break;
             case ComposerAttachmentKind.PastedImage:
                 // Its file is gone or failed the checks: the picture glyph, never a file system call.
                 name = $"Pasted image #{number}";
-                main.Padding = new Thickness(10, 0, 10, 0);
-                main.Content = new StackPanel
-                {
-                    Orientation = Orientation.Horizontal,
-                    Spacing = 6,
-                    Children = { PictureIcon(), new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center } },
-                };
+                tile.Width = TileSize;
+                main.Width = TileSize;
+                main.Content = PastedImageContent(PictureIcon(), number);
                 HoverTooltip.SetText(main, CantPreviewText(_pastedImages.GetValueOrDefault(entry.Item.Number) ?? name));
                 AutomationProperties.SetName(main, name);
                 break;
@@ -437,6 +420,60 @@ public sealed partial class ComposerWindow
 
     private static FontIcon PictureIcon() => new() { Glyph = PictureGlyph, FontSize = 16 };
 
+    /// <summary>
+    /// A pasted-image tile's content: the thumbnail slot under a small "Pasted image #N" ribbon in the bottom-right
+    /// corner (dark, so it reads on any image; clicks go through to the tile). Only "Pasted image" trims, so the number
+    /// that matches the badge in the text always shows ("Pasted… #1").
+    /// </summary>
+    private static Grid PastedImageContent(UIElement thumbnail, string number)
+    {
+        var label = new Grid
+        {
+            ColumnDefinitions =
+            {
+                new ColumnDefinition { Width = new GridLength(1, GridUnitType.Star) },
+                new ColumnDefinition { Width = GridLength.Auto },
+            },
+        };
+        var prefix = RibbonText("Pasted image");
+        prefix.TextTrimming = TextTrimming.CharacterEllipsis;
+        var suffix = RibbonText($" #{number}");
+        Grid.SetColumn(suffix, 1);
+        label.Children.Add(prefix);
+        label.Children.Add(suffix);
+        return new Grid
+        {
+            Children =
+            {
+                new Border { Width = TileSize, Height = TileSize, Child = thumbnail },
+                new Border
+                {
+                    HorizontalAlignment = HorizontalAlignment.Right,
+                    VerticalAlignment = VerticalAlignment.Bottom,
+                    Margin = new Thickness(2),
+                    MaxWidth = TileSize - 4,
+                    Padding = new Thickness(3, 0, 3, 1),
+                    CornerRadius = new CornerRadius(3),
+                    Background = new SolidColorBrush(ColorHelper.FromArgb(0xB0, 0, 0, 0)),
+                    IsHitTestVisible = false,
+                    Child = label,
+                },
+            },
+        };
+    }
+
+    private static TextBlock RibbonText(string text) => new()
+    {
+        Text = text,
+        FontSize = 9,
+        FontWeight = FontWeights.SemiBold,
+        Foreground = new SolidColorBrush(Colors.White),
+        TextWrapping = TextWrapping.NoWrap,
+        MaxLines = 1,
+        // A larger system text size would grow the ribbon into the hover x.
+        IsTextScaleFactorEnabled = false,
+    };
+
     private static string CantPreviewText(string path) => $"Can't preview: {path}";
 
     /// <summary>A file tile's tooltip: its full normalized path, or why it shows no thumbnail.</summary>
@@ -447,7 +484,7 @@ public sealed partial class ComposerWindow
         ? ThumbnailImage(cached, button, path)
         : PictureIcon();
 
-    /// <summary>The thumbnail's place in a tile button: the button itself, or a pasted-image chip's first child.</summary>
+    /// <summary>The thumbnail's place in a tile button: the button itself, or a pasted-image tile's slot under its ribbon.</summary>
     private static object? TileThumbnail(Button button) =>
         ThumbnailSlot(button) is { } slot ? slot.Child : button.Content;
 
@@ -458,7 +495,7 @@ public sealed partial class ComposerWindow
     }
 
     private static Border? ThumbnailSlot(Button button) =>
-        button.Content is StackPanel { Children.Count: > 0 } chip ? chip.Children[0] as Border : null;
+        button.Content is Grid { Children.Count: > 0 } pasted ? pasted.Children[0] as Border : null;
 
     private Image ThumbnailImage(BitmapImage source, Button button, string path)
     {
