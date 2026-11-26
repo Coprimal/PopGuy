@@ -63,7 +63,8 @@ actor ComposerThumbnailLoader {
     nonisolated static func isLocalPath(_ path: String) -> Bool {
         guard path.hasPrefix("/"), !path.hasPrefix("//") else { return false }
         // Lexical only: ".." cannot step into a refused tree.
-        let standardized = URL(fileURLWithPath: path).standardized.path
+        // isDirectory given: without it, Foundation checks the file system to decide.
+        let standardized = URL(fileURLWithPath: path, isDirectory: false).standardized.path
         // Case-insensitive: the default file system matches "/NET" to "/net".
         let lower = standardized.lowercased()
         let refused = ["/net/", "/network/", "/private/var/automount/", "/var/automount/", "/system/volumes/"]
@@ -79,7 +80,7 @@ actor ComposerThumbnailLoader {
     /// a regular file within the size limit (Foundation resource values).
     private nonisolated static func readableFile(_ path: String) -> (url: URL, modified: Date)? {
         guard isLocalPath(path) else { return nil }
-        let url = URL(fileURLWithPath: path).resolvingSymlinksInPath()
+        let url = URL(fileURLWithPath: path, isDirectory: false).resolvingSymlinksInPath()
         // A link may point into a refused tree.
         guard isLocalPath(url.path) else { return nil }
         let keys: Set<URLResourceKey> = [.isRegularFileKey, .fileSizeKey, .contentModificationDateKey]
