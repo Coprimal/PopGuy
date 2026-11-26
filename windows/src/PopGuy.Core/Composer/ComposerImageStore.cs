@@ -16,6 +16,9 @@ public sealed class ComposerImageStore(string directory, Action<string>? log = n
     /// <summary>The image files Claude Code attaches from an @-mention.</summary>
     private static readonly string[] ImageExtensions = [".png", ".jpg", ".jpeg", ".gif", ".webp"];
 
+    /// <summary>The folder the images are saved in (the composer shows mentions of its files as badges).</summary>
+    public string DirectoryPath => directory;
+
     /// <summary><c>&lt;cache directory&gt;\Composer\images</c> (production: %LOCALAPPDATA%\PopGuyData\Composer\images).</summary>
     public static string DefaultDirectory(AppPaths paths) => Path.Combine(paths.CacheDirectory, "Composer", "images");
 

@@ -119,6 +119,7 @@ struct ComposerImagePreview: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .padding(6)
         .hoverTooltip("Close (Esc)")
         .accessibilityLabel("Close the preview")

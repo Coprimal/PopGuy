@@ -137,8 +137,11 @@ final class HoverTooltipPanelPresenter {
     private init() {}
 
     /// `leadingAligned` lines the tooltip up with the anchor's leading edge
-    /// instead of its trailing edge. The result is clamped to the screen.
-    func show(text: String, anchor: NSView, cornerRadius: CGFloat = 6, leadingAligned: Bool = false) {
+    /// instead of its trailing edge. `rect` (in the anchor's coordinates) places it
+    /// at a part of the anchor instead of its bounds, e.g. a run of text in a text
+    /// view. The result is clamped to the screen.
+    func show(text: String, anchor: NSView, rect: NSRect? = nil, cornerRadius: CGFloat = 6,
+              leadingAligned: Bool = false) {
         // A hover timer can fire after its window was hidden (a button re-enabled
         // under the pointer after an action closed the toolbar). Ordering the child
         // tooltip in would order the hidden parent back in with it.
@@ -154,7 +157,7 @@ final class HoverTooltipPanelPresenter {
 
         panel.contentView = hostingController.view
         panel.setContentSize(hostingController.view.fittingSize)
-        position(panel, near: anchor, leadingAligned: leadingAligned)
+        position(panel, near: anchor, rect: rect ?? anchor.bounds, leadingAligned: leadingAligned)
 
         if panel.parent !== parentWindow {
             panel.parent?.removeChildWindow(panel)
@@ -190,15 +193,16 @@ final class HoverTooltipPanelPresenter {
         return panel
     }
 
-    private func position(_ panel: NSPanel, near anchor: NSView, leadingAligned: Bool) {
+    private func position(_ panel: NSPanel, near anchor: NSView, rect: NSRect, leadingAligned: Bool) {
         guard let parentWindow = anchor.window else { return }
 
-        let anchorInWindow = anchor.convert(anchor.bounds, to: nil)
+        let anchorInWindow = anchor.convert(rect, to: nil)
         let anchorOnScreen = parentWindow.convertToScreen(anchorInWindow)
         let tooltipSize = panel.frame.size
         var origin = NSPoint(
             x: leadingAligned ? anchorOnScreen.minX : anchorOnScreen.maxX - tooltipSize.width,
-            y: anchorOnScreen.minY - 28
+            // A wrapped (taller) tooltip moves down too, so it never covers the anchor.
+            y: anchorOnScreen.minY - max(28, tooltipSize.height + 4)
         )
 
         if let visibleFrame = parentWindow.screen?.visibleFrame ?? NSScreen.main?.visibleFrame {

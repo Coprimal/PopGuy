@@ -57,14 +57,19 @@ final class ComposerModel: ObservableObject {
         images.bind(text: $text.eraseToAnyPublisher())
     }
 
+    /// The text as it leaves the composer: pasted image badges expanded to their mentions.
+    var expandedText: String {
+        images.expand(text)
+    }
+
     /// Done copies the text instead of delivering it.
     var isCopyOnly: Bool {
         sessionEnded || noTarget
     }
 
-    /// The text cannot be sent back: it exceeds the protocol's size cap.
+    /// The text cannot be sent back: it (with badges expanded) exceeds the protocol's size cap.
     var isTooLarge: Bool {
-        text.utf8.count > ComposerMessage.maxTextBytes
+        expandedText.utf8.count > ComposerMessage.maxTextBytes
     }
 }
 
@@ -93,7 +98,10 @@ struct ComposerView: View {
                         guard images.isPreviewOpen else { return false }
                         images.closePreview()
                         return true
-                    }
+                    },
+                    collapsePastedImages: { images.collapse($0) },
+                    expandPastedImages: { images.expand($0) },
+                    pastedImagePath: { images.pastedImages[$0] }
                 )
                 // A smaller editor while the strip shows, so the window's minimum size does not clip.
                 .frame(minWidth: 320, maxWidth: .infinity, minHeight: images.items.isEmpty ? 140 : 80,
@@ -210,7 +218,7 @@ struct ComposerView: View {
             guard !model.text.isEmpty else { return }
             let pasteboard = NSPasteboard.general
             pasteboard.clearContents()
-            pasteboard.setString(model.text, forType: .string)
+            pasteboard.setString(model.expandedText, forType: .string)
             model.onCopyAndClose()
             return
         }

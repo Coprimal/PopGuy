@@ -48,16 +48,42 @@ public static class HoverTooltip
     /// </summary>
     private static FrameworkElement? _pressed;
 
+    /// <summary>A tooltip from <see cref="ShowFor"/>: its part of <see cref="_hovered"/> (the element's coordinates) and text.</summary>
+    private static Rect? _area;
+    private static string? _areaText;
+
     public static string? GetText(DependencyObject element) => (string?)element.GetValue(TextProperty);
 
     /// <summary>Sets the tooltip of <paramref name="element"/>; null or empty removes it.</summary>
     public static void SetText(DependencyObject element, string? value) => element.SetValue(TextProperty, value);
+
+    /// <summary>
+    /// Shows <paramref name="text"/> for a part of <paramref name="element"/> (<paramref name="area"/>, in the element's
+    /// coordinates) after the same delay, for an element whose parts have their own tooltips (a token in a text box). The
+    /// caller follows the pointer and calls <see cref="Dismiss"/> when it leaves the part; the same part and text again
+    /// change nothing.
+    /// </summary>
+    public static void ShowFor(FrameworkElement element, Rect area, string text)
+    {
+        if (ReferenceEquals(_hovered, element) && _area == area && _areaText == text) return;
+        Dismiss();
+        _hovered = element;
+        _area = area;
+        _areaText = text;
+        _timer ??= CreateTimer();
+        _timer.Start();
+    }
+
+    /// <summary>A tooltip from <see cref="ShowFor"/> for <paramref name="element"/> is pending or shown (no other took over).</summary>
+    public static bool IsShowingFor(FrameworkElement element) => ReferenceEquals(_hovered, element) && _area is not null;
 
     /// <summary>Hides the tooltip now (its window hides, a menu opens).</summary>
     public static void Dismiss()
     {
         _timer?.Stop();
         _hovered = null;
+        _area = null;
+        _areaText = null;
         if (_popup is not null) _popup.IsOpen = false;
     }
 
@@ -134,14 +160,14 @@ public static class HoverTooltip
     private static void OnTick(DispatcherQueueTimer sender, object args)
     {
         sender.Stop();
-        if (_hovered is not { XamlRoot: { } root } element || GetText(element) is not { Length: > 0 } text) return;
+        if (_hovered is not { XamlRoot: { } root } element || (_areaText ?? GetText(element)) is not { Length: > 0 } text) return;
         if (element.ActualWidth <= 0 || element.Visibility != Visibility.Visible) return;
         var popup = PopupFor(root);
         _label!.Text = text;
         var bubble = (FrameworkElement)popup.Child;
         bubble.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
         // In the window's coordinates, the element's render transforms (the toolbar zoom) included.
-        var bounds = element.TransformToVisual(null).TransformBounds(new Rect(0, 0, element.ActualWidth, element.ActualHeight));
+        var bounds = element.TransformToVisual(null).TransformBounds(_area ?? new Rect(0, 0, element.ActualWidth, element.ActualHeight));
         var x = bounds.Right - bubble.DesiredSize.Width;
         popup.HorizontalOffset = x < 0 ? bounds.Left : x;
         popup.VerticalOffset = bounds.Bottom + Gap;

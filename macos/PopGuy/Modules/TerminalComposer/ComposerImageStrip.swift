@@ -2,10 +2,14 @@
 // PopGuy
 //
 // The Terminal Composer's image strip: one tile per image mention ("@/abs/path.png")
-// whose file exists, plus a chip per CLI "[Image #N]" placeholder when the session's
-// CLI uses them. A click selects the mention in the editor (and, for a file, opens
-// the enlarged preview, see ComposerImagePreview); the hover x removes it from the
-// text as one undoable edit.
+// whose file exists, a chip (thumbnail and label) per "[Pasted image #N]" badge known
+// to the session (ComposerPastedImages), plus a chip per CLI "[Image #N]"
+// placeholder when the session's CLI uses them. A click selects the mention in the
+// editor (and, for a file or a pasted image, opens the enlarged preview, see
+// ComposerImagePreview); the hover x removes it from the text as one undoable edit.
+//
+// The model also keeps the session's pasted image mapping (badge number → path):
+// text entering the composer is collapsed with it, text leaving it is expanded.
 //
 // ComposerImageStripModel follows the editor text (Combine, debounced), parses it
 // with ComposerAttachments, checks the files off the main actor and loads thumbnails
@@ -45,6 +49,9 @@ final class ComposerImageStripModel: ObservableObject {
     /// Paths whose thumbnail could not be decoded.
     @Published var failedPaths: Set<String> = []
     @Published var preview: PreviewState?
+    /// This session's pasted image badges: number → the image's path. Kept for the
+    /// whole session, so a badge brought back by undo still expands.
+    @Published private(set) var pastedImages: [Int: String] = [:]
 
     /// Shows the CLI's "[Image #N]" chips; changing it re-filters the current text.
     var showsClaudeImageTokens = false {
@@ -112,7 +119,7 @@ final class ComposerImageStripModel: ObservableObject {
         textGeneration += 1
         let generation = textGeneration
 
-        let paths = Set(parsedItems.compactMap(Self.path(of:)))
+        let paths = Set(parsedItems.compactMap(path(of:)))
         // Known paths show at once; new ones appear once their file is found.
         existingPaths.formIntersection(paths)
         failedPaths.formIntersection(paths)
@@ -136,6 +143,8 @@ final class ComposerImageStripModel: ObservableObject {
         items = parsedItems.filter { item in
             switch item.kind {
             case .file(let path): existingPaths.contains(path)
+            // A known badge keeps its chip even when its file is gone ("Can't preview").
+            case .pastedImage(let number): pastedImages[number] != nil
             case .cliImage: showsClaudeImageTokens
             }
         }
@@ -145,7 +154,7 @@ final class ComposerImageStripModel: ObservableObject {
     private func loadThumbnails(generation: Int) async {
         var requested: Set<String> = []
         for item in items {
-            guard let path = Self.path(of: item), !requested.contains(path),
+            guard let path = path(of: item), !requested.contains(path),
                   thumbnails[path] == nil, !failedPaths.contains(path) else { continue }
             requested.insert(path)
             let image = await ComposerThumbnailLoader.shared.thumbnail(path: path)
@@ -167,15 +176,42 @@ final class ComposerImageStripModel: ObservableObject {
         }
     }
 
-    private static func path(of item: ComposerAttachments.Item) -> String? {
-        if case .file(let path) = item.kind { return path }
-        return nil
+    /// The image file of a mention or of a mapped pasted image badge.
+    func path(of item: ComposerAttachments.Item) -> String? {
+        switch item.kind {
+        case .file(let path): path
+        case .pastedImage(let number): pastedImages[number]
+        case .cliImage: nil
+        }
+    }
+
+    // MARK: - Pasted image badges
+
+    /// A new composer session: no badges known yet. The next `update` parses again,
+    /// even for the same text (its badges may now name other files).
+    func resetPastedImages() {
+        pastedImages = [:]
+        parsedText = nil
+    }
+
+    /// Text entering the composer: mentions of images in PopGuy's image store become badges.
+    func collapse(_ text: String) -> String {
+        guard let directory = ComposerImageStore.standard?.directory.path else { return text }
+        var mapping = pastedImages
+        let collapsed = ComposerPastedImages.collapse(text, storeDirectory: directory, mapping: &mapping)
+        if mapping != pastedImages { pastedImages = mapping }
+        return collapsed
+    }
+
+    /// Text leaving the composer: badges become the full mentions again.
+    func expand(_ text: String) -> String {
+        ComposerPastedImages.expand(text, mapping: pastedImages)
     }
 
     // MARK: - Actions
 
-    /// Selects the item in the editor; a file item also opens the enlarged preview
-    /// (placeholder now, image once decoded) and locks the editor.
+    /// Selects the item in the editor; a file or pasted image item also opens the
+    /// enlarged preview (placeholder now, image once decoded) and locks the editor.
     func activate(_ item: ComposerAttachments.Item) {
         #if DEBUG
         let clickTime = ContinuousClock.now
@@ -183,7 +219,7 @@ final class ComposerImageStripModel: ObservableObject {
         let text = editor.currentText
         guard let match = currentMatch(for: item, in: text) else { return }
         editor.select(match.range)
-        guard case .file(let path) = match.kind else { return }
+        guard let path = path(of: match) else { return }
 
         editor.setLocked(true)
         previewGeneration += 1
@@ -317,6 +353,7 @@ private struct ComposerImageTile: View {
                 .contentShape(RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous))
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .hoverTooltip(tooltip)
         .accessibilityLabel(accessibilityName)
         .overlay(alignment: .topTrailing) {
@@ -331,20 +368,20 @@ private struct ComposerImageTile: View {
     private var tileContent: some View {
         switch item.kind {
         case .file(let path):
-            ZStack {
+            thumbnail(path)
+        case .pastedImage(let number):
+            HStack(spacing: 8) {
+                thumbnail(model.pastedImages[number])
+                Text("Pasted image #\(number)")
+                    .lineLimit(1)
+                    .foregroundStyle(.secondary)
+                    .padding(.trailing, 10)
+            }
+            .frame(minHeight: Self.size)
+            .background(
                 RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
                     .fill(.quaternary)
-                if let image = model.thumbnails[path] {
-                    Image(decorative: image, scale: 2)
-                        .resizable()
-                        .aspectRatio(contentMode: .fill)
-                        .frame(width: Self.size, height: Self.size)
-                } else {
-                    Image(systemName: "photo")
-                        .foregroundStyle(.secondary)
-                }
-            }
-            .frame(width: Self.size, height: Self.size)
+            )
         case .cliImage(let number):
             HStack(spacing: 6) {
                 Image(systemName: "photo")
@@ -361,6 +398,23 @@ private struct ComposerImageTile: View {
         }
     }
 
+    private func thumbnail(_ path: String?) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: Self.cornerRadius, style: .continuous)
+                .fill(.quaternary)
+            if let image = path.flatMap({ model.thumbnails[$0] }) {
+                Image(decorative: image, scale: 2)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+                    .frame(width: Self.size, height: Self.size)
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .frame(width: Self.size, height: Self.size)
+    }
+
     private var removeButton: some View {
         Button {
             model.remove(item)
@@ -373,6 +427,7 @@ private struct ComposerImageTile: View {
                 .contentShape(Circle())
         }
         .buttonStyle(.plain)
+        .pointingHandCursor()
         .padding(3)
         .hoverTooltip("Remove from the text")
         .accessibilityLabel("Remove \(displayName) from the text")
@@ -381,21 +436,59 @@ private struct ComposerImageTile: View {
     private var displayName: String {
         switch item.kind {
         case .file(let path): (path as NSString).lastPathComponent
+        case .pastedImage(let number): "Pasted image #\(number)"
         case .cliImage(let number): "Image #\(number)"
         }
     }
 
     private var tooltip: String {
         switch item.kind {
-        case .file(let path): model.failedPaths.contains(path) ? "Can't preview" : displayName
-        case .cliImage: "\(displayName), attached in the terminal"
+        case .file, .pastedImage:
+            guard let path = model.path(of: item) else { return displayName }
+            return model.failedPaths.contains(path) ? "Can't preview: \(path)" : path
+        case .cliImage: return "\(displayName) is attached in the terminal, so PopGuy can't preview it"
         }
     }
 
     private var accessibilityName: String {
         switch item.kind {
         case .file: "Image \(displayName)"
+        case .pastedImage: displayName
         case .cliImage: "\(displayName), attached in the terminal"
         }
+    }
+}
+
+// MARK: - Pointing hand cursor
+
+private struct PointingHandCursorModifier: ViewModifier {
+    @State private var isPushed = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { hovering in
+                hovering ? push() : pop()
+            }
+            // A view removed under the pointer (the hover x) gets no hover end.
+            .onDisappear { pop() }
+    }
+
+    private func push() {
+        guard !isPushed else { return }
+        NSCursor.pointingHand.push()
+        isPushed = true
+    }
+
+    private func pop() {
+        guard isPushed else { return }
+        NSCursor.pop()
+        isPushed = false
+    }
+}
+
+extension View {
+    /// The pointing hand cursor while the pointer is over the view (AppKit cursor stack).
+    func pointingHandCursor() -> some View {
+        modifier(PointingHandCursorModifier())
     }
 }

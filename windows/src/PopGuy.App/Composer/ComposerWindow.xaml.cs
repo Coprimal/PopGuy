@@ -31,7 +31,8 @@ namespace PopGuy.Composer;
 /// &amp; Submit, Esc Cancel (closes the image preview, the suggestions, then the find bar first), Ctrl+F find;
 /// Tab / Shift+Tab indent / outdent a list item. In a CLI session, a command or skill typed with its trigger ("/" or "$") shows the CLI's matching
 /// <see cref="CatalogItem"/>s at the caret (<see cref="CommandSuggestions"/>): Up/Down select, Enter/Tab or a click accept.
-/// Pasting an image (or copied image files) inserts "@path" mentions (<see cref="ComposerImageStore"/>). Unlike the toolbar, the composer takes the
+/// Pasting an image (or copied image files) inserts "@path" mentions (<see cref="ComposerImageStore"/>); a mention of
+/// PopGuy's own pasted image shows as a "[Pasted image #N]" badge (<see cref="ComposerPastedImages"/>). Unlike the toolbar, the composer takes the
 /// foreground. One window per session: the controller makes it, answers its requests and closes it with
 /// <see cref="CloseComposer"/>. The text is never logged. UI thread only.
 /// </summary>
@@ -140,6 +141,8 @@ public sealed partial class ComposerWindow : Window
         FindBox.TextChanged += OnFindBoxTextChanged;
         Editor.TextChanged += OnEditorTextChanged;
         Editor.Paste += OnEditorPaste;
+        Editor.CopyingToClipboard += OnEditorCopyingToClipboard;
+        Editor.CuttingToClipboard += OnEditorCuttingToClipboard;
         Editor.PreviewKeyDown += OnEditorPreviewKeyDown;
         Editor.Loaded += OnEditorLoaded;
         Editor.SelectionChanged += OnEditorSelectionChanged;
@@ -183,14 +186,18 @@ public sealed partial class ComposerWindow : Window
     /// <summary>The foreground window when <see cref="ShowAndActivate"/> was called (not this one); 0 when none.</summary>
     public nint PreviousForeground { get; private set; }
 
-    /// <summary>The editor's plain text with "\n" line breaks. Setting it loads the text with an empty undo history.</summary>
+    /// <summary>
+    /// The editor's plain text with "\n" line breaks and the pasted-image badges expanded to their full mentions: the text
+    /// that leaves the composer (Done, Copy &amp; Close, drafts). Setting it loads the text with an empty undo history,
+    /// with the mentions of PopGuy's own pasted images shown as badges.
+    /// </summary>
     public string Text
     {
-        get => ComposerFileRules.NormalizeLineEndings(RawText().Replace('\v', '\n'));
+        get => ExpandPastedImages(ComposerFileRules.NormalizeLineEndings(RawText().Replace('\v', '\n')));
         set
         {
             _highlightTimer.Stop();
-            Editor.TextDocument.SetText(TextSetOptions.None, value.Replace("\r\n", "\r").Replace('\n', '\r'));
+            Editor.TextDocument.SetText(TextSetOptions.None, CollapsePastedImages(value.Replace("\r\n", "\r").Replace('\n', '\r')));
             Highlight();
             Editor.TextDocument.ClearUndoRedoHistory();
             // The caret at the end, to go on writing.
@@ -337,6 +344,8 @@ public sealed partial class ComposerWindow : Window
         _highlightTimer.Tick -= OnHighlightTick;
         Editor.TextChanged -= OnEditorTextChanged;
         Editor.Paste -= OnEditorPaste;
+        Editor.CopyingToClipboard -= OnEditorCopyingToClipboard;
+        Editor.CuttingToClipboard -= OnEditorCuttingToClipboard;
         Editor.PreviewKeyDown -= OnEditorPreviewKeyDown;
         Editor.Loaded -= OnEditorLoaded;
         Editor.SelectionChanged -= OnEditorSelectionChanged;
@@ -639,7 +648,8 @@ public sealed partial class ComposerWindow : Window
         if (_highlighted != _stripText) RefreshImageStrip();
     }
 
-    // Paste: plain text, or "@path" mentions for an image or copied image files.
+    // Paste: plain text (its mentions of PopGuy's own pasted images as badges), or "@path" mentions for an image or copied
+    // image files.
 
     private async void OnEditorPaste(object sender, TextControlPasteEventArgs e)
     {
@@ -648,7 +658,8 @@ public sealed partial class ComposerWindow : Window
         try
         {
             var content = Clipboard.GetContent();
-            text = await ImagePasteText(content) ?? (content.Contains(StandardDataFormats.Text) ? await content.GetTextAsync() : null);
+            text = await ImagePasteText(content)
+                ?? (content.Contains(StandardDataFormats.Text) ? CollapsePastedImages(await content.GetTextAsync()) : null);
             if (text is null) return;
         }
         catch (Exception exception) when (exception is COMException or UnauthorizedAccessException or IOException)
@@ -661,10 +672,41 @@ public sealed partial class ComposerWindow : Window
         selection.Collapse(false);
     }
 
+    // Copy and cut: the selection leaves the editor with its badges expanded (macOS writeSelection).
+
+    private void OnEditorCopyingToClipboard(RichEditBox sender, TextControlCopyingToClipboardEventArgs e) =>
+        e.Handled = CopyExpandedSelection(cut: false);
+
+    private void OnEditorCuttingToClipboard(RichEditBox sender, TextControlCuttingToClipboardEventArgs e) =>
+        e.Handled = CopyExpandedSelection(cut: true);
+
+    /// <summary>
+    /// Puts the selection on the clipboard as plain text with its badges expanded and, for a cut, deletes it as one range
+    /// edit (one undo step). False when the selection has no badge of this session: the editor's own copy or cut runs.
+    /// </summary>
+    private bool CopyExpandedSelection(bool cut)
+    {
+        if (_closed) return false;
+        var text = RawText();
+        var selection = Editor.TextDocument.Selection;
+        // The final paragraph mark is not part of the text.
+        var start = Math.Min(selection.StartPosition, text.Length);
+        var end = Math.Min(selection.EndPosition, text.Length);
+        if (end <= start) return false;
+        var selected = text[start..end];
+        var expanded = ExpandPastedImages(selected);
+        if (expanded == selected) return false;
+        // Handled even when the write fails (nothing is cut then): the editor's own copy would put the badges there.
+        if (!ClipboardGuard.WriteText(expanded.Replace('\v', '\n'), excludeFromHistory: false) || !cut) return true;
+        Editor.TextDocument.GetRange(start, end).SetText(TextSetOptions.None, "");
+        Editor.TextDocument.Selection.SetRange(start, start);
+        return true;
+    }
+
     /// <summary>
     /// The mentions to paste for the clipboard's images, or null to paste text: copied files that are all images (their
     /// own paths), else a bitmap when the clipboard has no text (or only a lone URL, as browsers copy an image), saved as
-    /// a PNG in <see cref="ImageStore"/>.
+    /// a PNG in <see cref="ImageStore"/>. A file in that folder pastes as its badge.
     /// </summary>
     private async Task<string?> ImagePasteText(DataPackageView content)
     {
@@ -692,7 +734,7 @@ public sealed partial class ComposerWindow : Window
             var before = RawText();
             if (selection.StartPosition <= before.Length) previous = before[selection.StartPosition - 1];
         }
-        return ComposerImageStore.Insertion(paths, previous);
+        return CollapsePastedImages(ComposerImageStore.Insertion(paths, previous));
     }
 
     /// <summary>The clipboard bitmap re-encoded as PNG.</summary>

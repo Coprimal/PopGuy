@@ -9,6 +9,7 @@
     x:Class="PopGuy.Composer.ComposerWindow"
     xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
     xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+    xmlns:controls="using:PopGuy.Controls"
     Title="PopGuy Composer">
 
     <!-- The solid base background, as the Settings window (never Mica, which takes a tint from the wallpaper). -->
@@ -300,13 +301,13 @@
                         Style="{StaticResource CaptionTextBlockStyle}"
                         TextTrimming="CharacterEllipsis"
                         TextWrapping="NoWrap" />
-                    <Button
+                    <controls:HandCursorButton
                         x:Name="ImagePreviewClose"
                         Grid.Row="0"
                         Grid.Column="1"
                         Style="{StaticResource SubtleButtonStyle}">
                         <FontIcon FontSize="12" Glyph="&#xE711;" />
-                    </Button>
+                    </controls:HandCursorButton>
 
                     <Grid
                         x:Name="ImagePreviewArea"

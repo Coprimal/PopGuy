@@ -1,5 +1,6 @@
 // Finds the attachments in the Terminal Composer's plain text, for the image strip: image mentions written by
-// ComposerImageStore.Mention, and the "[Image #N]" placeholders a CLI (Claude Code) puts in its prompt. Pure
+// ComposerImageStore.Mention, the "[Image #N]" placeholders a CLI (Claude Code) puts in its prompt, and the
+// "[Pasted image #N]" badges the composer shows for its own pasted images (ComposerPastedImages). Pure
 // (text -> items). Same rules as macos/PopGuy/Modules/TerminalComposer/ComposerAttachments.swift.
 //
 // Rules (one pass over the UTF-16 code units, no regex; the text uses RichEdit's "\r" line breaks):
@@ -10,8 +11,9 @@
 //   - A mention qualifies when its path is an absolute local drive path ("X:\" or "X:/", ASCII drive letter; never
 //     UNC or device paths, whose lookup would reach the network) and its extension (after the last "." of the last
 //     "\" or "/" component, case-insensitive) is an image extension. No "~", no relative path, no punctuation trimmed.
-//   - "[Image #<ASCII digits>]" is a CLI image placeholder.
-//   - One item per occurrence, in text order, at most MaxItems.
+//   - "[Image #<ASCII digits>]" is a CLI image placeholder, "[Pasted image #<ASCII digits>]" a pasted-image badge; a
+//     number that overflows an int is no token.
+//   - One item per occurrence, in text order, at most MaxItems (unless the caller sets another limit).
 // Ranges are (Start, Length) in UTF-16 code units, the C# string index; every delimiter is ASCII, so no surrogate pair
 // is ever split.
 
@@ -23,11 +25,12 @@ public enum ComposerAttachmentKind
 {
     File,
     CliImage,
+    PastedImage,
 }
 
 /// <summary>
-/// One attachment in the text. <c>Path</c> is the file path (without "@" or quotes) for a File, null for a CliImage;
-/// <c>Number</c> is the placeholder's number for a CliImage, 0 for a File.
+/// One attachment in the text. <c>Path</c> is the file path (without "@" or quotes) for a File, null for a CliImage or a
+/// PastedImage; <c>Number</c> is the placeholder's or badge's number for a CliImage or a PastedImage, 0 for a File.
 /// </summary>
 public sealed record ComposerAttachment(ComposerAttachmentKind Kind, int Start, int Length, string Token, string? Path, int Number);
 
@@ -36,21 +39,24 @@ public static class ComposerAttachments
     public const int MaxItems = 50;
 
     private const string ImagePrefix = "[Image #";
+    private const string PastedImagePrefix = "[Pasted image #";
 
     /// <summary>The image files Claude Code attaches from an @-mention (same set as ComposerImageStore).</summary>
     private static readonly string[] ImageExtensions = ["png", "jpg", "jpeg", "gif", "webp"];
 
-    public static IReadOnlyList<ComposerAttachment> Parse(string text)
+    /// <summary>The items in <paramref name="text"/>, at most <paramref name="limit"/> (the strip's <see cref="MaxItems"/>).</summary>
+    public static IReadOnlyList<ComposerAttachment> Parse(string text, int limit = MaxItems)
     {
         var items = new List<ComposerAttachment>();
         var index = 0;
-        while (index < text.Length && items.Count < MaxItems)
+        while (index < text.Length && items.Count < limit)
         {
             (int End, ComposerAttachment? Item)? found;
             if (text[index] == '@' && (index == 0 || IsWhitespace(text[index - 1])))
                 found = Mention(text, index);
             else if (text[index] == '[')
-                found = CliImage(text, index);
+                found = Placeholder(text, index, ImagePrefix, ComposerAttachmentKind.CliImage)
+                    ?? Placeholder(text, index, PastedImagePrefix, ComposerAttachmentKind.PastedImage);
             else
                 found = null;
 
@@ -109,20 +115,30 @@ public static class ComposerAttachments
         return (end, FileItem(text, start, end, pathStart, end));
     }
 
-    /// <summary>The end of a "[Image #&lt;digits&gt;]" placeholder at <paramref name="start"/> and its item, or null.</summary>
-    private static (int End, ComposerAttachment? Item)? CliImage(string text, int start)
+    /// <summary>The end and number of a "[Pasted image #&lt;digits&gt;]" badge at <paramref name="start"/>, or null.</summary>
+    internal static (int End, int Number)? PastedImageBadge(string text, int start) =>
+        Numbered(text, start, PastedImagePrefix);
+
+    /// <summary>The end of a "&lt;prefix&gt;&lt;digits&gt;]" placeholder at <paramref name="start"/> and its item, or null.</summary>
+    private static (int End, ComposerAttachment? Item)? Placeholder(
+        string text, int start, string prefix, ComposerAttachmentKind kind)
     {
-        if (text.Length - start < ImagePrefix.Length
-            || string.CompareOrdinal(text, start, ImagePrefix, 0, ImagePrefix.Length) != 0) return null;
-        var digitsStart = start + ImagePrefix.Length;
+        if (Numbered(text, start, prefix) is not { } hit) return null;
+        return (hit.End, new ComposerAttachment(kind, start, hit.End - start, text[start..hit.End], null, hit.Number));
+    }
+
+    /// <summary>The end and number of "&lt;prefix&gt;&lt;ASCII digits&gt;]" at <paramref name="start"/>, or null.</summary>
+    private static (int End, int Number)? Numbered(string text, int start, string prefix)
+    {
+        if (start < 0 || text.Length - start < prefix.Length
+            || string.CompareOrdinal(text, start, prefix, 0, prefix.Length) != 0) return null;
+        var digitsStart = start + prefix.Length;
         var digitsEnd = digitsStart;
         while (digitsEnd < text.Length && IsDigit(text[digitsEnd])) digitsEnd += 1;
         if (digitsEnd == digitsStart || digitsEnd >= text.Length || text[digitsEnd] != ']'
             || !int.TryParse(text.AsSpan(digitsStart, digitsEnd - digitsStart), NumberStyles.None,
                 CultureInfo.InvariantCulture, out var number)) return null;
-        var end = digitsEnd + 1;
-        return (end, new ComposerAttachment(ComposerAttachmentKind.CliImage, start, end - start,
-            text[start..end], null, number));
+        return (digitsEnd + 1, number);
     }
 
     /// <summary>A File item for the token [tokenStart, tokenEnd) when its path [pathStart, pathEnd) qualifies.</summary>

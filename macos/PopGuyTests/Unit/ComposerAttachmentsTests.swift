@@ -2,7 +2,7 @@
 // PopGuyTests
 //
 // Tests for the Terminal Composer's attachment parser (the image strip's source):
-//   - @path, @"path" and [Image #N] items, with UTF-16 ranges, in text order
+//   - @path, @"path", [Image #N] and [Pasted image #N] items, with UTF-16 ranges, in text order
 //   - only absolute local image paths qualify as file mentions
 //   - removing an item takes the token plus exactly one adjacent space
 
@@ -28,6 +28,14 @@ struct ComposerAttachmentsTests {
         for item in items {
             #expect((text as NSString).substring(with: item.range) == item.token)
         }
+    }
+
+    @Test("finds [Pasted image #N] badges with UTF-16 ranges")
+    func findsPastedImageBadges() {
+        let text = "😀 [Pasted image #3] [Pasted image #] [Pasted image #99999999999999999999]"
+        #expect(ComposerAttachments.parse(text) == [
+            .init(kind: .pastedImage(number: 3), range: NSRange(location: 3, length: 17), token: "[Pasted image #3]"),
+        ])
     }
 
     @Test("only absolute local image paths qualify")

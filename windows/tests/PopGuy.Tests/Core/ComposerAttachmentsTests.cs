@@ -3,7 +3,7 @@ using PopGuy.Core.Composer;
 namespace PopGuy.Tests.Core;
 
 // Contract (macOS ComposerAttachmentsTests.swift): the Terminal Composer's attachment parser (the image strip's source)
-// finds @path, @"path" and [Image #N] items with UTF-16 ranges in text order; only absolute local drive paths to image
+// finds @path, @"path", [Image #N] and [Pasted image #N] items with UTF-16 ranges in text order; only absolute local drive paths to image
 // files qualify as file mentions; removing an item takes the token plus exactly one adjacent space.
 public sealed class ComposerAttachmentsTests
 {
@@ -11,7 +11,7 @@ public sealed class ComposerAttachmentsTests
     public void FindsPathQuotedPathAndCliImageItemsWithUtf16Ranges()
     {
         // The emoji is 2 UTF-16 units, so every range after it is shifted by 2.
-        var text = "😀 " + @"@C:\tmp\a.png @""C:\tmp\my shots\b.JPG"" [Image #12] x@C:/c.png @C:\d.txt @rel\e.png";
+        var text = "😀 " + @"@C:\tmp\a.png @""C:\tmp\my shots\b.JPG"" [Image #12] x@C:/c.png @C:\d.txt @rel\e.png [Pasted image #3]";
 
         var items = ComposerAttachments.Parse(text);
 
@@ -21,6 +21,7 @@ public sealed class ComposerAttachmentsTests
                 new ComposerAttachment(ComposerAttachmentKind.File, 17, 24, @"@""C:\tmp\my shots\b.JPG""",
                     @"C:\tmp\my shots\b.JPG", 0),
                 new ComposerAttachment(ComposerAttachmentKind.CliImage, 42, 11, "[Image #12]", null, 12),
+                new ComposerAttachment(ComposerAttachmentKind.PastedImage, 86, 17, "[Pasted image #3]", null, 3),
             ],
             items);
         foreach (var item in items)

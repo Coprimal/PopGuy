@@ -16,11 +16,14 @@ namespace PopGuy.Composer;
 
 /// <summary>
 /// The composer's image strip and preview (macOS ComposerImageStrip.swift, ComposerImagePreview.swift,
-/// ComposerThumbnailLoader.swift): a 48 px tile per "@path" image mention whose file is a local regular file, plus a
-/// chip per CLI "[Image #N]" placeholder while <see cref="ShowsClaudeImageTokens"/>. A click selects the mention in the
-/// editor (a file also opens the in-window preview); the hover x removes it as one undoable edit. Nothing in the strip
-/// takes the focus from the editor. Mention paths are checked by <see cref="NormalizedLocalImagePath"/> before any file
-/// system call, so a mention never reaches the network. The text and paths are never logged. UI thread only.
+/// ComposerThumbnailLoader.swift): a 48 px tile per "@path" image mention whose file is a local regular file, a chip with
+/// its thumbnail per "[Pasted image #N]" badge of this session whose file is one too, else with the picture glyph
+/// (<see cref="ComposerPastedImages"/>), plus a chip per CLI
+/// "[Image #N]" placeholder while <see cref="ShowsClaudeImageTokens"/>. A click selects the mention in the editor (an
+/// image file also opens the in-window preview); the hover x removes it as one undoable edit. Hovering a badge in the
+/// editor shows its full path. Nothing in the strip takes the focus from the editor. Mention paths are checked by
+/// <see cref="NormalizedLocalImagePath"/> before any file system call, so a mention never reaches the network. The text
+/// and paths are never logged. UI thread only.
 /// </summary>
 public sealed partial class ComposerWindow
 {
@@ -46,7 +49,9 @@ public sealed partial class ComposerWindow
     private const int PreviewMaxDecodeHeight = 2048;
 
     private const string PictureGlyph = "\uE91B";
-    private const string CantPreview = "Can't preview";
+
+    /// <summary>The editor text read around the pointer for a badge (a badge is far shorter).</summary>
+    private const int BadgeHoverWindow = 64;
 
     /// <summary>The strip follows the text after a pause in typing (macOS: 150 ms).</summary>
     private static readonly TimeSpan StripDelay = TimeSpan.FromMilliseconds(150);
@@ -57,7 +62,10 @@ public sealed partial class ComposerWindow
     /// <summary>How long a selection made by a tile click counts as the composer's own.</summary>
     private const long OwnSelectionMilliseconds = 1000;
 
-    /// <summary>One strip tile: the item, its index among the items with the same token, its checked local path (files).</summary>
+    /// <summary>
+    /// One strip tile: the item, its index among the items with the same token, its checked local path (files and pasted
+    /// images whose file was found).
+    /// </summary>
     private sealed record StripEntry(ComposerAttachment Item, int Occurrence, string? LocalPath);
 
     private sealed record OwnSelection(string Text, long Ticks);
@@ -85,6 +93,15 @@ public sealed partial class ComposerWindow
     private readonly ScalarTransition _ringFade = new() { Duration = TimeSpan.FromMilliseconds(150) };
 
     private OwnSelection? _ownSelection;
+
+    /// <summary>
+    /// This session's pasted-image badges: number to the path as mentioned. Kept for the whole session, so a badge an undo
+    /// brings back still expands.
+    /// </summary>
+    private readonly Dictionary<int, string> _pastedImages = [];
+
+    private PointerEventHandler? _editorPointerMoved;
+    private PointerEventHandler? _editorPointerLeft;
 
 #if DEBUG
     /// <summary>From the tile click, for the preview's timing log.</summary>
@@ -138,6 +155,13 @@ public sealed partial class ComposerWindow
 
         Editor.TextChanged += OnImageTextChanged;
         Editor.Loaded += OnImageEditorLoaded;
+        // The editor handles the pointer itself: listen to handled events too.
+        _editorPointerMoved = OnEditorPointerMoved;
+        _editorPointerLeft = OnEditorPointerLeft;
+        Editor.AddHandler(UIElement.PointerMovedEvent, _editorPointerMoved, true);
+        Editor.AddHandler(UIElement.PointerExitedEvent, _editorPointerLeft, true);
+        Editor.AddHandler(UIElement.PointerPressedEvent, _editorPointerLeft, true);
+        Editor.AddHandler(UIElement.PointerWheelChangedEvent, _editorPointerLeft, true);
         ImageStrip.ActualThemeChanged += OnImageStripThemeChanged;
         ImagePreviewScrim.Tapped += OnPreviewScrimTapped;
         ImagePreviewClose.Click += OnPreviewCloseClick;
@@ -155,8 +179,16 @@ public sealed partial class ComposerWindow
 #if DEBUG
         CompositionTarget.Rendering -= OnPreviewRendering;
 #endif
+        HideBadgeTooltip();
         Editor.TextChanged -= OnImageTextChanged;
         Editor.Loaded -= OnImageEditorLoaded;
+        if (_editorPointerMoved is not null) Editor.RemoveHandler(UIElement.PointerMovedEvent, _editorPointerMoved);
+        if (_editorPointerLeft is not null)
+        {
+            Editor.RemoveHandler(UIElement.PointerExitedEvent, _editorPointerLeft);
+            Editor.RemoveHandler(UIElement.PointerPressedEvent, _editorPointerLeft);
+            Editor.RemoveHandler(UIElement.PointerWheelChangedEvent, _editorPointerLeft);
+        }
         ImageStrip.ActualThemeChanged -= OnImageStripThemeChanged;
         ImagePreviewScrim.Tapped -= OnPreviewScrimTapped;
         ImagePreviewClose.Click -= OnPreviewCloseClick;
@@ -171,6 +203,7 @@ public sealed partial class ComposerWindow
     private void OnImageTextChanged(object sender, RoutedEventArgs e)
     {
         if (_formatting || _closed) return;
+        HideBadgeTooltip();
         _stripTimer?.Stop();
         _stripTimer?.Start();
     }
@@ -207,8 +240,12 @@ public sealed partial class ComposerWindow
         var items = ComposerAttachments.Parse(text);
         ApplyStrip(items, _knownImages);
 
-        var paths = items.Where(item => item.Kind == ComposerAttachmentKind.File && item.Path is not null)
-            .Select(item => item.Path!).Distinct(StringComparer.Ordinal).ToArray();
+        var paths = items.Select(item => item.Kind switch
+            {
+                ComposerAttachmentKind.File => item.Path,
+                ComposerAttachmentKind.PastedImage => _pastedImages.GetValueOrDefault(item.Number),
+                _ => null,
+            }).OfType<string>().Distinct(StringComparer.Ordinal).ToArray();
         if (paths.Length == 0)
         {
             _knownImages = new Dictionary<string, string>(StringComparer.Ordinal);
@@ -246,13 +283,20 @@ public sealed partial class ComposerWindow
         {
             var occurrence = occurrences.GetValueOrDefault(item.Token);
             occurrences[item.Token] = occurrence + 1;
-            if (item.Kind == ComposerAttachmentKind.File)
+            switch (item.Kind)
             {
-                if (item.Path is { } path && files.TryGetValue(path, out var local)) entries.Add(new StripEntry(item, occurrence, local));
-            }
-            else if (_showsClaudeImageTokens)
-            {
-                entries.Add(new StripEntry(item, occurrence, null));
+                case ComposerAttachmentKind.File:
+                    if (item.Path is { } path && files.TryGetValue(path, out var local)) entries.Add(new StripEntry(item, occurrence, local));
+                    break;
+                case ComposerAttachmentKind.PastedImage:
+                    // A badge of this session: as a file mention when its file passed the checks, else a chip that can't
+                    // preview.
+                    if (_pastedImages.TryGetValue(item.Number, out var pasted))
+                        entries.Add(new StripEntry(item, occurrence, files.GetValueOrDefault(pasted)));
+                    break;
+                default:
+                    if (_showsClaudeImageTokens) entries.Add(new StripEntry(item, occurrence, null));
+                    break;
             }
         }
 
@@ -291,7 +335,7 @@ public sealed partial class ComposerWindow
     private Grid BuildTile(int index, StripEntry entry, Brush removeFill, Brush removeStroke)
     {
         var tile = new Grid { Height = TileSize, Background = new SolidColorBrush(Colors.Transparent) };
-        var main = new Button
+        var main = new HandCursorButton
         {
             Height = TileSize,
             Padding = new Thickness(0),
@@ -303,31 +347,66 @@ public sealed partial class ComposerWindow
             Tag = index,
         };
         string name;
-        if (entry.LocalPath is { } path)
+        var number = entry.Item.Number.ToString(CultureInfo.InvariantCulture);
+        switch (entry.Item.Kind)
         {
-            tile.Width = TileSize;
-            main.Width = TileSize;
-            name = Path.GetFileName(path);
-            if (_thumbnails.TryGetValue(path, out var cached)) main.Content = ThumbnailImage(cached, main, path);
-            else main.Content = PictureIcon();
-            HoverTooltip.SetText(main, _failedThumbnails.Contains(path) ? CantPreview : name);
-            AutomationProperties.SetName(main, $"Image {name}");
-        }
-        else
-        {
-            name = $"Image #{entry.Item.Number.ToString(CultureInfo.InvariantCulture)}";
-            main.Padding = new Thickness(10, 0, 10, 0);
-            main.Content = new StackPanel
-            {
-                Orientation = Orientation.Horizontal,
-                Spacing = 6,
-                Children = { PictureIcon(), new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center } },
-            };
-            SetIconButton(main, $"{name}, attached in the terminal");
+            case ComposerAttachmentKind.File when entry.LocalPath is { } path:
+                tile.Width = TileSize;
+                main.Width = TileSize;
+                name = Path.GetFileName(path);
+                main.Content = TileThumbnailContent(main, path);
+                HoverTooltip.SetText(main, FileTooltip(path));
+                AutomationProperties.SetName(main, $"Image {name}");
+                break;
+            case ComposerAttachmentKind.PastedImage when entry.LocalPath is { } pastedPath:
+                name = $"Pasted image #{number}";
+                main.Padding = new Thickness(0, 0, 10, 0);
+                main.Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 8,
+                    Children =
+                    {
+                        new Border
+                        {
+                            Width = TileSize,
+                            Height = TileSize,
+                            Child = TileThumbnailContent(main, pastedPath),
+                        },
+                        new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center },
+                    },
+                };
+                HoverTooltip.SetText(main, FileTooltip(pastedPath));
+                AutomationProperties.SetName(main, name);
+                break;
+            case ComposerAttachmentKind.PastedImage:
+                // Its file is gone or failed the checks: the picture glyph, never a file system call.
+                name = $"Pasted image #{number}";
+                main.Padding = new Thickness(10, 0, 10, 0);
+                main.Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { PictureIcon(), new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center } },
+                };
+                HoverTooltip.SetText(main, CantPreviewText(_pastedImages.GetValueOrDefault(entry.Item.Number) ?? name));
+                AutomationProperties.SetName(main, name);
+                break;
+            default:
+                name = $"Image #{number}";
+                main.Padding = new Thickness(10, 0, 10, 0);
+                main.Content = new StackPanel
+                {
+                    Orientation = Orientation.Horizontal,
+                    Spacing = 6,
+                    Children = { PictureIcon(), new TextBlock { Text = name, VerticalAlignment = VerticalAlignment.Center } },
+                };
+                SetIconButton(main, $"{name} is attached in the terminal, so PopGuy can't preview it");
+                break;
         }
         main.Click += OnTileClick;
 
-        var remove = new Button
+        var remove = new HandCursorButton
         {
             Width = RemoveButtonSize,
             Height = RemoveButtonSize,
@@ -358,6 +437,29 @@ public sealed partial class ComposerWindow
 
     private static FontIcon PictureIcon() => new() { Glyph = PictureGlyph, FontSize = 16 };
 
+    private static string CantPreviewText(string path) => $"Can't preview: {path}";
+
+    /// <summary>A file tile's tooltip: its full normalized path, or why it shows no thumbnail.</summary>
+    private string FileTooltip(string path) => _failedThumbnails.Contains(path) ? CantPreviewText(path) : path;
+
+    /// <summary>The cached thumbnail of <paramref name="path"/>, else the picture glyph until it loads.</summary>
+    private UIElement TileThumbnailContent(Button button, string path) => _thumbnails.TryGetValue(path, out var cached)
+        ? ThumbnailImage(cached, button, path)
+        : PictureIcon();
+
+    /// <summary>The thumbnail's place in a tile button: the button itself, or a pasted-image chip's first child.</summary>
+    private static object? TileThumbnail(Button button) =>
+        ThumbnailSlot(button) is { } slot ? slot.Child : button.Content;
+
+    private static void SetTileThumbnail(Button button, UIElement content)
+    {
+        if (ThumbnailSlot(button) is { } slot) slot.Child = content;
+        else button.Content = content;
+    }
+
+    private static Border? ThumbnailSlot(Button button) =>
+        button.Content is StackPanel { Children.Count: > 0 } chip ? chip.Children[0] as Border : null;
+
     private Image ThumbnailImage(BitmapImage source, Button button, string path)
     {
         var image = new Image { Source = source, Stretch = Stretch.UniformToFill, Width = TileSize, Height = TileSize };
@@ -365,8 +467,8 @@ public sealed partial class ComposerWindow
         {
             _thumbnails.Remove(path);
             _failedThumbnails.Add(path);
-            button.Content = PictureIcon();
-            HoverTooltip.SetText(button, CantPreview);
+            SetTileThumbnail(button, PictureIcon());
+            HoverTooltip.SetText(button, CantPreviewText(path));
         };
         return image;
     }
@@ -384,12 +486,12 @@ public sealed partial class ComposerWindow
         {
             if (buttons.Count == 0) return;
             _failedThumbnails.Add(path);
-            foreach (var button in buttons) HoverTooltip.SetText(button, CantPreview);
+            foreach (var button in buttons) HoverTooltip.SetText(button, CantPreviewText(path));
             return;
         }
         foreach (var button in buttons)
         {
-            if (button.Content is not Image) button.Content = ThumbnailImage(image, button, path);
+            if (TileThumbnail(button) is not Image) SetTileThumbnail(button, ThumbnailImage(image, button, path));
         }
     }
 
@@ -451,8 +553,9 @@ public sealed partial class ComposerWindow
     }
 
     /// <summary>
-    /// Selects the item in the editor (marked as the composer's own selection, see <see cref="IsOwnSelection"/>); a file
-    /// also opens the preview in the same call, a chip gives the focus back to the editor.
+    /// Selects the item in the editor (marked as the composer's own selection, see <see cref="IsOwnSelection"/>); an image
+    /// file (a mention, or a pasted image's badge) also opens the preview in the same call, a CLI chip gives the focus back
+    /// to the editor.
     /// </summary>
     internal void ActivateAttachment(ComposerAttachment item)
     {
@@ -466,7 +569,7 @@ public sealed partial class ComposerWindow
         var selection = Editor.TextDocument.Selection;
         selection.SetRange(match.Start, match.Start + match.Length);
         selection.ScrollIntoView(PointOptions.None);
-        if (match.Kind == ComposerAttachmentKind.File && found.Entry.LocalPath is { } path)
+        if (found.Entry.LocalPath is { } path)
         {
 #if DEBUG
             _previewClock = clock;
@@ -496,6 +599,77 @@ public sealed partial class ComposerWindow
         if (SuggestionsVisible) DismissSuggestions();
         RefreshImageStrip();
         Editor.Focus(FocusState.Programmatic);
+    }
+
+    // Pasted-image badges.
+
+    /// <summary><paramref name="text"/> with the mentions of PopGuy's own pasted images as badges (numbers kept per session).</summary>
+    private string CollapsePastedImages(string text) => ComposerPastedImages.Collapse(text, IsPastedImagePath, _pastedImages);
+
+    /// <summary><paramref name="text"/> with this session's badges back as full mentions.</summary>
+    private string ExpandPastedImages(string text) => ComposerPastedImages.Expand(text, _pastedImages);
+
+    /// <summary>
+    /// A path directly in <see cref="ImageStore"/>'s folder, compared lexically as normalized drive paths, case-insensitive
+    /// (no file system call: it only decides how the mention shows).
+    /// </summary>
+    private bool IsPastedImagePath(string path)
+    {
+        if (ImageStore is not { } store
+            || ComposerImagePath.NormalizedDrivePath(store.DirectoryPath) is not { } folder
+            || ComposerImagePath.NormalizedDrivePath(path) is not { } normalized) return false;
+        return normalized.LastIndexOf('\\') == folder.Length
+            && normalized.StartsWith(folder, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>The pointer over a badge in the editor shows its full path in the hover tooltip.</summary>
+    private void OnEditorPointerMoved(object sender, PointerRoutedEventArgs e)
+    {
+        if (_closed || _pastedImages.Count == 0 || IsPreviewOpen) return;
+        if (BadgeUnderPointer(e.GetCurrentPoint(Editor).Position) is { } badge)
+        {
+            HoverTooltip.ShowFor(Editor, badge.Area, badge.Path);
+        }
+        else
+        {
+            HideBadgeTooltip();
+        }
+    }
+
+    private void OnEditorPointerLeft(object sender, PointerRoutedEventArgs e) => HideBadgeTooltip();
+
+    /// <summary>Hides the badge's tooltip only: another element's tooltip that took over stays.</summary>
+    private void HideBadgeTooltip()
+    {
+        if (HoverTooltip.IsShowingFor(Editor)) HoverTooltip.Dismiss();
+    }
+
+    /// <summary>
+    /// The known badge under <paramref name="point"/> (the editor's coordinates): its area in the editor and its path.
+    /// The text position comes from the document's hit test, in its text coordinates (DIPs from the top left of the text
+    /// inside the padding, unscrolled, as <see cref="PositionSuggestions"/> reads them); the nearest position may be on
+    /// either side of the character under the pointer, or past the end of a line, so the badge's own rect must hold it.
+    /// </summary>
+    private (Windows.Foundation.Rect Area, string Path)? BadgeUnderPointer(Windows.Foundation.Point point)
+    {
+        var offsetX = Editor.BorderThickness.Left + Editor.Padding.Left - (_editorScroll?.HorizontalOffset ?? 0);
+        var offsetY = Editor.BorderThickness.Top + Editor.Padding.Top - (_editorScroll?.VerticalOffset ?? 0);
+        var textPoint = new Windows.Foundation.Point(point.X - offsetX, point.Y - offsetY);
+        var document = Editor.TextDocument;
+        var position = document.GetRangeFromPoint(textPoint, PointOptions.ClientCoordinates).StartPosition;
+        // The editor's indices ("\r" line breaks), in a short window of the text around the position.
+        var from = Math.Max(0, position - BadgeHoverWindow);
+        document.GetRange(from, position + BadgeHoverWindow).GetText(TextGetOptions.None, out var near);
+        foreach (var index in new[] { position, position - 1 })
+        {
+            if (ComposerPastedImages.BadgeAt(near, index - from) is not { } badge
+                || !_pastedImages.TryGetValue(badge.Number, out var path)) continue;
+            var start = from + badge.Start;
+            document.GetRange(start, start + badge.Length).GetRect(PointOptions.None, out var rect, out _);
+            if (!rect.Contains(textPoint)) continue;
+            return (new Windows.Foundation.Rect(rect.X + offsetX, rect.Y + offsetY, rect.Width, rect.Height), path);
+        }
+        return null;
     }
 
     // The preview.

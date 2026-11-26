@@ -12,7 +12,11 @@
 // selection, Return and Tab accept, and Esc closes only the list.
 // Return and Backspace continue and end Markdown lists, Tab and Shift+Tab indent and
 // outdent list items (ListContinuation). Pasting an image inserts an "@path" mention
-// (ComposerImageStore).
+// (ComposerImageStore), or a "[Pasted image #N]" badge for an image in PopGuy's image
+// store (ComposerPastedImages); hovering a known badge shows its path in the custom
+// hover tooltip (HoverTooltipPanelPresenter), never a system tooltip. Copy, cut and
+// drag write the selection with its badges expanded; pasted or dropped text gets its
+// store mentions collapsed to badges again.
 // Standard edit shortcuts (cut/copy/paste/undo/redo/select all/find) are handled
 // in the view itself, so they work whether or not the app's main menu has an Edit menu.
 // ComposerEditorHandle lets SwiftUI select or remove a range and lock the editor
@@ -36,6 +40,12 @@ struct ComposerTextView: NSViewRepresentable {
     var editor: ComposerEditorHandle? = nil
     /// Checked first on Esc; returning true consumes it (nothing else happens).
     var onEscapeOverride: (() -> Bool)? = nil
+    /// Turns the mentions of a paste into pasted image badges where they apply.
+    var collapsePastedImages: ((String) -> String)? = nil
+    /// Turns the pasted image badges of copied text back into full mentions.
+    var expandPastedImages: ((String) -> String)? = nil
+    /// The path of a pasted image badge number, or nil when the session has none.
+    var pastedImagePath: ((Int) -> String?)? = nil
 
     static let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize + 1)
 
@@ -115,6 +125,9 @@ struct ComposerTextView: NSViewRepresentable {
         textView.onDoneAndSubmit = onDoneAndSubmit
         textView.onCancel = onCancel
         textView.onEscapeOverride = onEscapeOverride
+        textView.collapsePastedImages = collapsePastedImages ?? { $0 }
+        textView.expandPastedImages = expandPastedImages ?? { $0 }
+        textView.pastedImagePath = pastedImagePath ?? { _ in nil }
         editor?.textView = textView
     }
 
@@ -224,11 +237,22 @@ final class ComposerNSTextView: NSTextView {
     var onCancel: () -> Void = {}
     /// Checked first on Esc; returning true consumes it.
     var onEscapeOverride: (() -> Bool)?
+    var collapsePastedImages: (String) -> String = { $0 }
+    var expandPastedImages: (String) -> String = { $0 }
+    var pastedImagePath: (Int) -> String? = { _ in nil }
 
     /// The command suggestion list of this editor.
     private(set) lazy var suggestions = CommandSuggestionPopup(textView: self)
 
+    /// Delay before a badge's tooltip shows, as the other hover tooltips.
+    private static let badgeTooltipDelay: Duration = .milliseconds(120)
+    private var badgeTrackingArea: NSTrackingArea?
+    /// The badge whose tooltip is shown or pending.
+    private var hoveredBadge: (range: NSRange, path: String)?
+    private var badgeTooltipTask: Task<Void, Never>?
+
     override func viewWillMove(toWindow newWindow: NSWindow?) {
+        hideBadgeTooltip()
         if let window {
             NotificationCenter.default.removeObserver(self, name: NSWindow.willCloseNotification, object: window)
         }
@@ -248,6 +272,7 @@ final class ComposerNSTextView: NSTextView {
 
     @objc private func windowWillClose(_ notification: Notification) {
         suggestions.hide()
+        hideBadgeTooltip()
     }
 
     /// Focus leaving the editor hides the suggestions; a click on the list keeps the focus here.
@@ -325,7 +350,112 @@ final class ComposerNSTextView: NSTextView {
         let previous = range.location > 0
             ? (string as NSString).substring(with: NSRange(location: range.location - 1, length: 1)).first
             : nil
-        insertText(ComposerImageStore.insertion(for: paths, after: previous), replacementRange: range)
+        insertText(collapsePastedImages(ComposerImageStore.insertion(for: paths, after: previous)),
+                   replacementRange: range)
+    }
+
+    /// Copy, cut and drag: the text leaves the editor with its badges expanded.
+    override func writeSelection(to pboard: NSPasteboard, types: [NSPasteboard.PasteboardType]) -> Bool {
+        guard super.writeSelection(to: pboard, types: types) else { return false }
+        if let text = pboard.string(forType: .string) {
+            let expanded = expandPastedImages(text)
+            if expanded != text { pboard.setString(expanded, forType: .string) }
+        }
+        return true
+    }
+
+    /// Paste and drop of text: store mentions become badges again. The collapsed text is
+    /// read through a private pasteboard, so AppKit still inserts it (range, undo).
+    override func readSelection(from pboard: NSPasteboard, type: NSPasteboard.PasteboardType) -> Bool {
+        guard let text = pboard.string(forType: .string) else {
+            return super.readSelection(from: pboard, type: type)
+        }
+        let collapsed = collapsePastedImages(text)
+        guard collapsed != text else { return super.readSelection(from: pboard, type: type) }
+        let collapsedBoard = NSPasteboard.withUniqueName()
+        defer { collapsedBoard.releaseGlobally() }
+        collapsedBoard.setString(collapsed, forType: .string)
+        return super.readSelection(from: collapsedBoard, type: .string)
+    }
+
+    // MARK: Pasted image badge tooltip
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let badgeTrackingArea { removeTrackingArea(badgeTrackingArea) }
+        let area = NSTrackingArea(rect: .zero,
+                                  options: [.mouseMoved, .mouseEnteredAndExited, .activeInKeyWindow, .inVisibleRect],
+                                  owner: self, userInfo: nil)
+        addTrackingArea(area)
+        badgeTrackingArea = area
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        updateBadgeTooltip(at: convert(event.locationInWindow, from: nil))
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        hideBadgeTooltip()
+    }
+
+    override func mouseDown(with event: NSEvent) {
+        hideBadgeTooltip()
+        super.mouseDown(with: event)
+    }
+
+    override func scrollWheel(with event: NSEvent) {
+        hideBadgeTooltip()
+        super.scrollWheel(with: event)
+    }
+
+    override func didChangeText() {
+        super.didChangeText()
+        hideBadgeTooltip()
+    }
+
+    /// Shows the path of the known badge under `point` (after the hover delay), else
+    /// hides the tooltip. Not while locked: the image preview covers the editor then.
+    private func updateBadgeTooltip(at point: NSPoint) {
+        guard isEditable, let badge = badge(at: point), let path = pastedImagePath(badge.number) else {
+            hideBadgeTooltip()
+            return
+        }
+        if let hoveredBadge, hoveredBadge.range == badge.range, hoveredBadge.path == path { return }
+        hideBadgeTooltip()
+        hoveredBadge = (badge.range, path)
+        badgeTooltipTask = Task { [weak self] in
+            try? await Task.sleep(for: Self.badgeTooltipDelay)
+            guard let self, !Task.isCancelled, self.hoveredBadge?.range == badge.range else { return }
+            HoverTooltipPanelPresenter.shared.show(text: path, anchor: self, rect: badge.rect, leadingAligned: true)
+        }
+    }
+
+    private func hideBadgeTooltip() {
+        badgeTooltipTask?.cancel()
+        badgeTooltipTask = nil
+        guard hoveredBadge != nil else { return }
+        hoveredBadge = nil
+        HoverTooltipPanelPresenter.shared.hide(anchor: self)
+    }
+
+    /// The badge drawn under `point` (view coordinates): its range, number and rect.
+    /// TextKit 1 gives the nearest glyph, so the point must also be inside that glyph.
+    private func badge(at point: NSPoint) -> (range: NSRange, number: Int, rect: NSRect)? {
+        guard let layoutManager, let textContainer else { return nil }
+        let origin = textContainerOrigin
+        let containerPoint = NSPoint(x: point.x - origin.x, y: point.y - origin.y)
+        let glyphIndex = layoutManager.glyphIndex(for: containerPoint, in: textContainer)
+        guard glyphIndex < layoutManager.numberOfGlyphs,
+              layoutManager.boundingRect(forGlyphRange: NSRange(location: glyphIndex, length: 1), in: textContainer)
+                .contains(containerPoint) else { return nil }
+        let characterIndex = layoutManager.characterIndexForGlyph(at: glyphIndex)
+        guard let (range, number) = ComposerPastedImages.badgeRange(at: characterIndex, in: string) else { return nil }
+        let glyphs = layoutManager.glyphRange(forCharacterRange: range, actualCharacterRange: nil)
+        let rect = layoutManager.boundingRect(forGlyphRange: glyphs, in: textContainer)
+            .offsetBy(dx: origin.x, dy: origin.y)
+        return (range, number, rect)
     }
 
     /// Applies the list edit for a single caret (no selection, no IME composition) as one undoable edit.

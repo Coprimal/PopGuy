@@ -13,6 +13,11 @@
 //     pastes into it, Done & Submit pastes and presses Return. A failed paste copies
 //     the text instead. Without a target, Done is Copy & Close.
 //
+// PopGuy's own pasted images show as "[Pasted image #N]" badges (ComposerPastedImages):
+// the text is collapsed when it enters the composer (open, restored draft) and
+// expanded wherever it leaves it (Done, Done & Submit, copy, drafts, the editor's
+// copy, cut and drag).
+//
 // Drafts: autosaved while the text differs from the opening text; saved at Done and
 // deleted once the text was delivered (the CLI confirmed the write after "done", or a
 // successful paste); kept otherwise.
@@ -130,6 +135,9 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         resetImagePreview()
         // Before the text, so the strip filters the new text with the new setting.
         model.images.showsClaudeImageTokens = showsClaudeImageTokens
+        // A new session numbers its pasted image badges from 1.
+        model.images.resetPastedImages()
+        let text = model.images.collapse(text)
         model.text = text
         model.images.update(text: text)
         model.sourceAppName = sourceAppName
@@ -153,9 +161,10 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         }
     }
 
+    /// Compares the editor's (collapsed) text; saves it expanded.
     private func saveDraftIfChanged(_ text: String, draftID: UUID, openedText: String) {
         if text != openedText {
-            store.scheduleSave(id: draftID, text: text)
+            store.scheduleSave(id: draftID, text: model.images.expand(text))
         } else {
             store.delete(id: draftID)
         }
@@ -166,7 +175,7 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         Task { [weak self] in
             guard let self, let draft = await store.latestDraft(excluding: draftID),
                   currentDraftID == draftID else { return }
-            model.text = draft.text
+            model.text = model.images.collapse(draft.text)
             model.draftAvailable = false
             window.undoManager?.removeAllActions()
             // The text now lives on as this composer's draft.
@@ -189,7 +198,7 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         case .idle:
             return
         case .cli(let session, let sourcePID, let draftID):
-            let text = ComposerFileRules.normalizeLineEndings(model.text)
+            let text = ComposerFileRules.normalizeLineEndings(model.expandedText)
             // The final text is on disk before the reply (flush waits for the save on the
             // store's serial queue), so a failed write loses nothing.
             store.save(id: draftID, text: text)
@@ -204,7 +213,7 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
                 Self.log.info("Composer: session did not end in time; draft kept, no auto-submit")
             }
         case .compose(let sourcePID, let draftID):
-            let text = model.text
+            let text = model.expandedText
             closeWindow()
             guard let sourcePID, !text.isEmpty else {
                 Self.log.info("Composer: compose done without a target or text; nothing pasted")
