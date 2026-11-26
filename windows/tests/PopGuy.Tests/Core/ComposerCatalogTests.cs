@@ -65,6 +65,36 @@ public sealed class ComposerCatalogTests : IDisposable
     }
 
     [Fact]
+    public void ClaudeListsTheSignedInAccountsSyncedSkillsAndPrefixesPluginsOnce()
+    {
+        const string org = "0f8fad5b-d9cb-469f-a165-70867728950e";
+        const string account = "7C9E6679-7425-40DE-944B-E07FC1F90AE7";
+        var config = Path.Combine(_root, "config");
+        var cwd = Path.Combine(_root, "project");
+        var globalConfig = Path.Combine(_root, ".claude.json");
+        Write($"config/skills/synced/{org}_{account}/pdf/SKILL.md", "---\nname: pdf\ndescription: Read PDFs\n---\n");
+        Write($"config/skills/synced/{org}_{account}/hidden/SKILL.md", "---\nuser-invocable: false\n---\n");
+        Write($"config/skills/synced/{org}_00000000-0000-0000-0000-000000000000/other/SKILL.md", "---\nname: other\n---\n");
+        Write("config/skills/synced/SKILL.md", "---\nname: synced\n---\n");
+        var pluginPath = Path.Combine(_root, "plugins", "on");
+        Write("plugins/on/skills/fancy/SKILL.md", "---\nname: on:fancy\n---\n");
+        Write("config/plugins/installed_plugins.json",
+            "{\"version\":2,\"plugins\":{\"on@market\":[{\"installPath\":" + Json(pluginPath) + "}]}}");
+        Write("config/settings.json", """{"enabledPlugins":{"on@market":true}}""");
+
+        // The global config grows past the 1 MiB JSON cap of the other config files.
+        var padding = new string('x', 1_100_000);
+        Write(".claude.json", $$$"""{"pad":"{{{padding}}}","oauthAccount":{"organizationUuid":"{{{org}}}","accountUuid":"{{{account}}}"}}""");
+        var items = ComposerCatalog.ClaudeItems(config, cwd, globalConfig);
+        Assert.Equal(["anthropic-skills:pdf", "on:fancy"], items.Select(item => item.Name));
+        AssertEncodes("claude", items);
+
+        // An id that is not a UUID never becomes a path, even one that leads back to the account's folder.
+        Write(".claude.json", $$$"""{"oauthAccount":{"organizationUuid":"../synced/{{{org}}}","accountUuid":"{{{account}}}"}}""");
+        Assert.Equal(["on:fancy"], ComposerCatalog.ClaudeItems(config, cwd, globalConfig).Select(item => item.Name));
+    }
+
+    [Fact]
     public void GeminiReadsTomlDescriptionsAndSkipsUntrustedProjects()
     {
         var gemini = Path.Combine(_root, "gemini");

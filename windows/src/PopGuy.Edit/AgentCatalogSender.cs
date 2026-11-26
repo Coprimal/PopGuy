@@ -19,6 +19,8 @@ internal static partial class Program
     private const int MaxAncestorLevels = 8;
     /// <summary>Whole codex app-server exchange: start, requests and the skills/list reply.</summary>
     private static readonly TimeSpan CodexTimeout = TimeSpan.FromSeconds(3);
+    /// <summary>Longest codex stdout line read; a longer one ends the read with no catalog.</summary>
+    private const int MaxCodexLineBytes = 16 * 1024 * 1024;
 
     /// <summary>Guards <see cref="_codexChild"/>'s start and <see cref="_exiting"/>.</summary>
     private static readonly Lock ChildLock = new();
@@ -63,14 +65,22 @@ internal static partial class Program
         switch (agent)
         {
             case "claude":
+                // The global config (.claude.json, which names the signed-in account) sits in CLAUDE_CONFIG_DIR, else
+                // in the profile folder beside .claude.
                 var configDir = Environment.GetEnvironmentVariable("CLAUDE_CONFIG_DIR");
+                string globalConfig;
                 if (string.IsNullOrEmpty(configDir))
                 {
                     if (home.Length == 0)
                         return null;
                     configDir = Path.Combine(home, ".claude");
+                    globalConfig = Path.Combine(home, ".claude.json");
                 }
-                items = ComposerCatalog.ClaudeItems(configDir, cwd);
+                else
+                {
+                    globalConfig = Path.Combine(configDir, ".claude.json");
+                }
+                items = ComposerCatalog.ClaudeItems(configDir, cwd, globalConfig);
                 break;
             case "gemini":
                 if (home.Length == 0)
@@ -146,7 +156,7 @@ internal static partial class Program
 
             // The redirected stdout is synchronous: the read runs on its own task, and killing the child (finally)
             // is what ends it after a timeout.
-            var stdout = child.StandardOutput;
+            var stdout = child.StandardOutput.BaseStream;
             var read = Task.Run(() => ReadSkillsListReply(stdout));
             var remaining = CodexTimeout - clock.Elapsed;
             if (remaining <= TimeSpan.Zero || !read.Wait(remaining))
@@ -159,26 +169,54 @@ internal static partial class Program
         }
     }
 
-    /// <summary>The first stdout line that answers request 2 (numeric id 2, no method), or null at end of output.
-    /// Notifications, server requests and non-JSON lines are skipped.</summary>
-    private static string? ReadSkillsListReply(StreamReader stdout)
+    /// <summary>The first stdout line that answers request 2 (numeric id 2, no method), or null at end of output or
+    /// at a line over <see cref="MaxCodexLineBytes"/>. Notifications, server requests and non-JSON lines are skipped.</summary>
+    private static string? ReadSkillsListReply(Stream stdout)
     {
-        while (stdout.ReadLine() is { } line)
+        var line = new ArrayBufferWriter<byte>();
+        var chunk = new byte[64 * 1024];
+        int count;
+        while ((count = stdout.Read(chunk)) > 0)
         {
-            try
+            var rest = chunk.AsSpan(0, count);
+            for (var end = rest.IndexOf((byte)'\n'); end >= 0; end = rest.IndexOf((byte)'\n'))
             {
-                using var document = JsonDocument.Parse(line);
-                var root = document.RootElement;
-                if (root.ValueKind == JsonValueKind.Object
-                    && !root.TryGetProperty("method", out _)
-                    && root.TryGetProperty("id", out var id)
-                    && id.ValueKind == JsonValueKind.Number && id.TryGetInt64(out var value) && value == 2)
-                    return line;
+                if (line.WrittenCount + end > MaxCodexLineBytes)
+                    return null;
+                line.Write(rest[..end]);
+                if (SkillsListReply(line.WrittenMemory) is { } reply)
+                    return reply;
+                line.ResetWrittenCount();
+                rest = rest[(end + 1)..];
             }
-            catch (JsonException)
-            {
-                // Not a JSON-RPC line.
-            }
+            if (line.WrittenCount + rest.Length > MaxCodexLineBytes)
+                return null;
+            line.Write(rest);
+        }
+        // The last line may end without "\n".
+        return SkillsListReply(line.WrittenMemory);
+    }
+
+    /// <summary>The line as text when it is the reply to request 2, else null.</summary>
+    private static string? SkillsListReply(ReadOnlyMemory<byte> line)
+    {
+        if (line.Span.EndsWith("\r"u8))
+            line = line[..^1];
+        if (line.IsEmpty)
+            return null;
+        try
+        {
+            using var document = JsonDocument.Parse(line);
+            var root = document.RootElement;
+            if (root.ValueKind == JsonValueKind.Object
+                && !root.TryGetProperty("method", out _)
+                && root.TryGetProperty("id", out var id)
+                && id.ValueKind == JsonValueKind.Number && id.TryGetInt64(out var value) && value == 2)
+                return Encoding.UTF8.GetString(line.Span);
+        }
+        catch (JsonException)
+        {
+            // Not a JSON-RPC line.
         }
         return null;
     }

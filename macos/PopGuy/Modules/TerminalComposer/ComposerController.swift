@@ -335,7 +335,6 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         guard case .cli(let current, _, _) = state, current == session else { return }
         Self.log.info("Composer: session ended while open")
         model.sessionEnded = true
-        model.suggestionCatalog = nil
     }
 
     func composerServerDidRejectBusy(_ server: ComposerServer) {

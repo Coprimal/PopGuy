@@ -19,9 +19,11 @@ public static class ComposerCatalog
     /// <summary>Walk caps per source: folder depth below the source root, and entries visited.</summary>
     private const int MaxDepth = 4;
     private const int MaxEntriesPerSource = 2_000;
-    /// <summary>Read caps: a command or skill file, and a JSON settings file.</summary>
+    /// <summary>Read caps: a command or skill file, a JSON settings file, and the global config (.claude.json, which
+    /// grows with use).</summary>
     private const int MaxFileBytes = 64 * 1024;
     private const int MaxJsonBytes = 1_048_576;
+    private const int MaxGlobalConfigBytes = 16 * 1024 * 1024;
 
     private static readonly JsonDocumentOptions JsonOptions = new()
     {
@@ -45,37 +47,80 @@ public static class ComposerCatalog
     // Claude Code
 
     /// <summary>Claude Code's "/" items: the project's (<c>cwd/.claude</c>) and the user's (<paramref name="configDir"/>:
-    /// CLAUDE_CONFIG_DIR or the profile's .claude folder) commands and skills, then the enabled plugins' ones as
-    /// <c>plugin:name</c>. Finished (<see cref="Finish"/>): project items win over user and plugin ones.</summary>
-    public static IReadOnlyList<CatalogItem> ClaudeItems(string configDir, string cwd)
+    /// CLAUDE_CONFIG_DIR or the profile's .claude folder) commands and skills, then the signed-in account's synced skills
+    /// as <c>anthropic-skills:name</c> (account read from <paramref name="globalConfigFile"/>, the .claude.json beside or
+    /// in the config folder; null: none), then the enabled plugins' ones as <c>plugin:name</c>. Finished
+    /// (<see cref="Finish"/>): project items win over user, synced and plugin ones.</summary>
+    public static IReadOnlyList<CatalogItem> ClaudeItems(string configDir, string cwd, string? globalConfigFile = null)
     {
         var items = new List<CatalogItem>();
         AddClaudeFolder(items, Path.Combine(cwd, ".claude"), "");
-        AddClaudeFolder(items, configDir, "");
+        AddClaudeFolder(items, configDir, "", skipSynced: true);
+        if (globalConfigFile is not null && SyncedSkillsFolder(configDir, globalConfigFile) is { } synced)
+            AddSkills(items, synced, "anthropic-skills:");
         foreach (var (plugin, installPath) in EnabledPlugins(configDir, cwd))
             AddClaudeFolder(items, installPath, plugin + ":");
         return Finish(items);
     }
 
-    /// <summary><c>root/commands/**/*.md</c> (folders joined with ":") and <c>root/skills/*/SKILL.md</c>.</summary>
-    private static void AddClaudeFolder(List<CatalogItem> items, string root, string prefix)
+    /// <summary><c>root/commands/**/*.md</c> (folders joined with ":") and <c>root/skills/*/SKILL.md</c>; with
+    /// <paramref name="skipSynced"/> (the user's config folder), never <c>skills/synced</c>: synced skills are listed
+    /// from their account's folder only.</summary>
+    private static void AddClaudeFolder(List<CatalogItem> items, string root, string prefix, bool skipSynced = false)
     {
         foreach (var (name, path) in FilesUnder(Path.Combine(root, "commands"), ".md"))
         {
             var frontmatter = ReadFrontmatter(ReadText(path, MaxFileBytes) ?? "");
-            items.Add(new CatalogItem("/", prefix + name, frontmatter.GetValueOrDefault("description") ?? ""));
+            items.Add(new CatalogItem("/", Prefixed(prefix, name), frontmatter.GetValueOrDefault("description") ?? ""));
         }
+        AddSkills(items, Path.Combine(root, "skills"), prefix, skipSynced);
+    }
 
-        foreach (var folder in Subfolders(Path.Combine(root, "skills")))
+    /// <summary><c>skillsDir/*/SKILL.md</c>, except the user-invocable: false ones (and the <c>synced</c> folder with
+    /// <paramref name="skipSynced"/>).</summary>
+    private static void AddSkills(List<CatalogItem> items, string skillsDir, string prefix, bool skipSynced = false)
+    {
+        foreach (var folder in Subfolders(skillsDir))
         {
-            if (ReadText(Path.Combine(folder, "SKILL.md"), MaxFileBytes) is not { } text)
+            if (skipSynced && Path.GetFileName(folder) == "synced" || ReadText(Path.Combine(folder, "SKILL.md"), MaxFileBytes) is not { } text)
                 continue;
             var frontmatter = ReadFrontmatter(text);
             if (string.Equals(frontmatter.GetValueOrDefault("user-invocable"), "false", StringComparison.OrdinalIgnoreCase))
                 continue;
             var name = frontmatter.GetValueOrDefault("name") is { Length: > 0 } declared ? declared : Path.GetFileName(folder);
-            items.Add(new CatalogItem("/", prefix + name, frontmatter.GetValueOrDefault("description") ?? ""));
+            items.Add(new CatalogItem("/", Prefixed(prefix, name), frontmatter.GetValueOrDefault("description") ?? ""));
         }
+    }
+
+    /// <summary>A name that already starts with <paramref name="prefix"/> keeps it once.</summary>
+    private static string Prefixed(string prefix, string name) =>
+        name.StartsWith(prefix, StringComparison.Ordinal) ? name : prefix + name;
+
+    /// <summary><c>configDir/skills/synced/&lt;organizationUuid&gt;_&lt;accountUuid&gt;</c> for the global config's
+    /// <c>oauthAccount</c>, or null when either id is missing or not a UUID (they become a path).</summary>
+    private static string? SyncedSkillsFolder(string configDir, string globalConfigFile)
+    {
+        using var config = ReadJson(globalConfigFile, MaxGlobalConfigBytes);
+        if (config is not { RootElement: { ValueKind: JsonValueKind.Object } root }
+            || !root.TryGetProperty("oauthAccount", out var account) || account.ValueKind != JsonValueKind.Object
+            || StringProperty(account, "organizationUuid") is not { } organization || !IsUuid(organization)
+            || StringProperty(account, "accountUuid") is not { } user || !IsUuid(user))
+            return null;
+        return Path.Combine(configDir, "skills", "synced", organization + "_" + user);
+    }
+
+    /// <summary>Exactly 8-4-4-4-12 hex digits.</summary>
+    private static bool IsUuid(string value)
+    {
+        if (value.Length != 36)
+            return false;
+        for (var i = 0; i < value.Length; i++)
+        {
+            var dash = i is 8 or 13 or 18 or 23;
+            if (dash ? value[i] != '-' : !char.IsAsciiHexDigit(value[i]))
+                return false;
+        }
+        return true;
     }
 
     /// <summary>The installed plugins (installed_plugins.json, version 2) that <c>enabledPlugins</c> turns on, after
@@ -529,10 +574,11 @@ public static class ComposerCatalog
         }
     }
 
-    /// <summary>A JSON file parsed as a document (the caller disposes it), or null when missing, too large or not JSON.</summary>
-    private static JsonDocument? ReadJson(string path)
+    /// <summary>A JSON file parsed as a document (the caller disposes it), or null when missing, over
+    /// <paramref name="maxBytes"/> or not JSON.</summary>
+    private static JsonDocument? ReadJson(string path, int maxBytes = MaxJsonBytes)
     {
-        if (ReadText(path, MaxJsonBytes + 1) is not { } text || text.Length > MaxJsonBytes)
+        if (ReadText(path, maxBytes + 1) is not { } text || text.Length > maxBytes)
             return null;
         try
         {

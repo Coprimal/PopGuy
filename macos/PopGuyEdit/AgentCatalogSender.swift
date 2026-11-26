@@ -135,7 +135,9 @@ private func buildCatalog(filePath: String) -> (agent: String, items: [ComposerC
         let configDir = configured.isEmpty
             ? home.appendingPathComponent(".claude", isDirectory: true)
             : URL(fileURLWithPath: configured, isDirectory: true)
-        return (agent, ComposerCatalog.claudeItems(configDir: configDir, cwd: cwd))
+        // The global config sits in $CLAUDE_CONFIG_DIR when set, else beside ~/.claude.
+        let globalConfigFile = (configured.isEmpty ? home : configDir).appendingPathComponent(".claude.json")
+        return (agent, ComposerCatalog.claudeItems(configDir: configDir, cwd: cwd, globalConfigFile: globalConfigFile))
     case "gemini":
         let geminiDir = home.appendingPathComponent(".gemini", isDirectory: true)
         return (agent, ComposerCatalog.geminiItems(geminiDir: geminiDir, cwd: cwd))
@@ -229,8 +231,9 @@ private func codexSkills(executable: String, cwd: URL) -> [ComposerCatalogItem] 
     return ComposerCatalog.parseSkillsListReply(reply)
 }
 
-/// Reads "\n"-framed JSON-RPC lines until one has `"id": <id>`; nil on EOF, error,
-/// the size cap or the deadline.
+/// Reads "\n"-framed JSON-RPC lines until a reply has `"id": <id>` and no `method` (a
+/// server request with the same id is skipped); the last line may end without "\n" at EOF.
+/// Nil on EOF without a reply, error, the size cap or the deadline.
 private func readLine(withID id: Int, from fd: Int32, deadline: Date) -> Data? {
     var buffer = Data()
     var chunk = [UInt8](repeating: 0, count: 64 * 1024)
@@ -238,10 +241,7 @@ private func readLine(withID id: Int, from fd: Int32, deadline: Date) -> Data? {
         while let newline = buffer.firstIndex(of: 0x0A) {
             let line = Data(buffer[buffer.startIndex..<newline])
             buffer.removeSubrange(buffer.startIndex...newline)
-            if let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
-               let lineID = object["id"] as? Int, lineID == id {
-                return line
-            }
+            if isReply(line, withID: id) { return line }
         }
         if buffer.count > codexReplyCap { return nil }
 
@@ -259,7 +259,14 @@ private func readLine(withID id: Int, from fd: Int32, deadline: Date) -> Data? {
             if errno == EINTR || errno == EAGAIN { continue }
             return nil
         }
-        if count == 0 { return nil }
+        if count == 0 { return isReply(buffer, withID: id) ? buffer : nil }
         buffer.append(contentsOf: chunk[0..<count])
     }
+}
+
+/// True when the line is a JSON-RPC reply with `"id": <id>` and no `method`.
+private func isReply(_ line: Data, withID id: Int) -> Bool {
+    guard let object = try? JSONSerialization.jsonObject(with: line) as? [String: Any],
+          let lineID = object["id"] as? Int else { return false }
+    return lineID == id && object["method"] == nil
 }

@@ -5,7 +5,9 @@
 // MIRROR of macos/PopGuyEdit/ComposerCatalog.swift), on temp-folder fixtures.
 // Covers:
 //   - Claude: nested command names, folded skill descriptions, user-invocable: false,
-//     enabled vs disabled plugins
+//     enabled vs disabled plugins, a plugin name not prefixed twice, the signed-in
+//     account's synced skills only (non-UUID account ids ignored, a global config over
+//     1 MiB still read), the "synced" folder skipped in the user config only
 //   - Gemini: TOML description, project commands skipped in a DO_NOT_TRUST folder
 //   - Codex: skills/list reply keeps enabled skills only
 //   - Agent detection from the temp file path
@@ -37,6 +39,8 @@ struct ComposerCatalogTests {
         let disabledPath = root.appendingPathComponent("plugins/off").path
         try write("---\nname: cf-plan\ndescription: \"Plan a feature\"\n---\n",
                   root, "plugins/cf/skills/plan/SKILL.md")
+        // A plugin skill already named "<plugin>:…" is not prefixed twice.
+        try write("---\nname: coding-friend:fancy\n---\n", root, "plugins/cf/skills/fancy/SKILL.md")
         try write("---\ndescription: Off\n---\n", root, "plugins/off/commands/nope.md")
         try write("""
             {"version":2,"plugins":{
@@ -49,14 +53,36 @@ struct ComposerCatalogTests {
         try write(#"{"enabledPlugins":{"coding-friend@market":true}}"#, cwd, ".claude/settings.json")
         try write(#"{"enabledPlugins":{"offplug@market":false}}"#, cwd, ".claude/settings.local.json")
 
-        let items = ComposerCatalog.claudeItems(configDir: config, cwd: cwd)
+        // Synced claude.ai skills: only the signed-in account's folder counts.
+        let org = "0A1B2C3D-0000-4000-8000-000000000001", account = "0a1b2c3d-0000-4000-8000-000000000002"
+        try write("---\nname: pdf\ndescription: PDF tools\n---\n", config, "skills/synced/\(org)_\(account)/pdf/SKILL.md")
+        try write("---\nname: other\n---\n", config, "skills/synced/\(org)_\(org)/other/SKILL.md")
+        try write("---\nname: leak\n---\n", config, "skills/x_y/leak/SKILL.md")
+        // Only the user config's "synced" folder is skipped; a project skill folder named so is listed.
+        try write("---\nname: synced\n---\n", config, "skills/synced/SKILL.md")
+        try write("---\nname: project-synced\n---\n", cwd, ".claude/skills/synced/SKILL.md")
+        // The global config grows past the 1 MiB JSON cap of the other config files.
+        let padding = String(repeating: "x", count: 1_100_000)
+        let globalConfig = root.appendingPathComponent("claude.json")
+        try write(#"{"pad":"\#(padding)","oauthAccount":{"organizationUuid":"\#(org)","accountUuid":"\#(account)"}}"#,
+                  root, "claude.json")
+
+        let items = ComposerCatalog.claudeItems(configDir: config, cwd: cwd, globalConfigFile: globalConfig)
 
         #expect(items == [
+            ComposerCatalogItem(trigger: "/", name: "anthropic-skills:pdf", description: "PDF tools"),
             ComposerCatalogItem(trigger: "/", name: "coding-friend:cf-plan", description: "Plan a feature"),
+            ComposerCatalogItem(trigger: "/", name: "coding-friend:fancy", description: ""),
             ComposerCatalogItem(trigger: "/", name: "git:commit", description: "Project commit"),
+            ComposerCatalogItem(trigger: "/", name: "project-synced", description: ""),
             ComposerCatalogItem(trigger: "/", name: "review", description: "Review the current diff"),
         ])
         _ = try ComposerMessage.encodeLine(.catalog(agent: "claude", items: items))
+
+        // A non-UUID account id never becomes a path ("skills/synced/../x_y" holds "leak").
+        try write(#"{"oauthAccount":{"organizationUuid":"../x","accountUuid":"y"}}"#, root, "claude.json")
+        let unsafe = ComposerCatalog.claudeItems(configDir: config, cwd: cwd, globalConfigFile: globalConfig)
+        #expect(!unsafe.contains { $0.name.hasPrefix("anthropic-skills:") })
     }
 
     @Test("Gemini: TOML descriptions, project commands skipped in an untrusted folder")

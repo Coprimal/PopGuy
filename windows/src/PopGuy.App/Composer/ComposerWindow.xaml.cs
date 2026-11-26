@@ -910,7 +910,8 @@ public sealed partial class ComposerWindow : Window
         PositionSuggestions();
     }
 
-    /// <summary>One row per item: the name, then the description, both plain text (TextBlock.Text is never markup).</summary>
+    /// <summary>One row per item: the trigger and name ("/review"), then the description, both plain text (TextBlock.Text
+    /// is never markup).</summary>
     private void BuildSuggestionRows()
     {
         var highlightStyle = (Style)RootGrid.Resources["SuggestionHighlightStyle"];
@@ -936,11 +937,11 @@ public sealed partial class ComposerWindow : Window
             Grid.SetColumnSpan(highlight, 2);
             row.Children.Add(highlight);
             row.Children.Add(new Microsoft.UI.Xaml.Shapes.Rectangle { Style = pillStyle });
-            row.Children.Add(new TextBlock { Style = nameStyle, Text = item.Name });
+            row.Children.Add(new TextBlock { Style = nameStyle, Text = item.Trigger + item.Name });
             var description = new TextBlock { Style = descriptionStyle, Text = item.Description };
             Grid.SetColumn(description, 1);
             row.Children.Add(description);
-            AutomationProperties.SetName(row, item.Name);
+            AutomationProperties.SetName(row, item.Trigger + item.Name);
             row.PointerPressed += OnSuggestionRowPointerPressed;
             rows.Add(row);
         }
@@ -967,13 +968,13 @@ public sealed partial class ComposerWindow : Window
         SuggestionScroll.ChangeView(null, offset, null, true);
     }
 
-    /// <summary>Up and Down move the selection (wrapping), Enter and Tab accept it; false: the key does its own thing.</summary>
+    /// <summary>Up and Down move the selection (stopping at the first and last row), Enter and Tab accept it; false: the
+    /// key does its own thing.</summary>
     private bool HandleSuggestionKey(VirtualKey key)
     {
         if (key is VirtualKey.Up or VirtualKey.Down)
         {
-            var count = _suggestions.Count;
-            _suggestionIndex = (_suggestionIndex + (key == VirtualKey.Down ? 1 : count - 1)) % count;
+            _suggestionIndex = Math.Clamp(_suggestionIndex + (key == VirtualKey.Down ? 1 : -1), 0, _suggestions.Count - 1);
             UpdateSuggestionSelection(scrollToTop: false);
             return true;
         }

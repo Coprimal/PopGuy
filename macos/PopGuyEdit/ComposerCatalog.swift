@@ -9,12 +9,14 @@
 //
 // Sources (names and descriptions only):
 //   claude "/": <cwd>/.claude, then <configDir> (commands/**/*.md, skills/*/SKILL.md), then
-//               enabled plugins' commands and skills named "<plugin>:<name>"
+//               the signed-in account's synced claude.ai skills named "anthropic-skills:<name>",
+//               then enabled plugins' commands and skills named "<plugin>:<name>"
 //   gemini "/": <cwd>/.gemini (unless DO_NOT_TRUST), ~/.gemini, extensions: commands/**/*.toml
 //   codex  "$": the enabled skills of an app-server skills/list reply
 // Walks skip hidden entries, never enter a symlinked directory below a source, go at
 // most 4 directory levels below it and visit at most 2,000 entries per source. Command
-// files are read up to 64 KB, JSON configs up to 1 MB; IO errors are ignored (an
+// files are read up to 64 KB, JSON configs up to 1 MB (the global config, which grows with
+// use, up to 16 MB); IO errors are ignored (an
 // unreadable command keeps its name). `finish` makes every item valid for the protocol.
 
 import Foundation
@@ -25,6 +27,7 @@ nonisolated enum ComposerCatalog {
     static let maxEntriesPerSource = 2_000
     static let maxCommandFileBytes = 65_536
     static let maxConfigFileBytes = 1_048_576
+    static let maxGlobalConfigFileBytes = 16 * 1024 * 1024
 
     // MARK: - Agent
 
@@ -40,12 +43,17 @@ nonisolated enum ComposerCatalog {
 
     // MARK: - Claude Code
 
-    /// Claude Code commands and skills. `configDir` is $CLAUDE_CONFIG_DIR or ~/.claude.
-    /// Project items come first, so they win over user and plugin items with the same name.
-    static func claudeItems(configDir: URL, cwd: URL) -> [ComposerCatalogItem] {
+    /// Claude Code commands and skills. `configDir` is $CLAUDE_CONFIG_DIR or ~/.claude;
+    /// `globalConfigFile` ($CLAUDE_CONFIG_DIR/.claude.json or ~/.claude.json) names the
+    /// account whose synced skills are listed (nil: none). Project items come first, so they
+    /// win over user, synced and plugin items with the same name.
+    static func claudeItems(configDir: URL, cwd: URL, globalConfigFile: URL?) -> [ComposerCatalogItem] {
         let project = cwd.appendingPathComponent(".claude")
         var items = claudeSourceItems(project, prefix: "")
-        items += claudeSourceItems(configDir, prefix: "")
+        items += claudeSourceItems(configDir, prefix: "", skipSynced: true)
+        if let globalConfigFile, let synced = syncedSkillsFolder(configDir, globalConfigFile: globalConfigFile) {
+            items += skillItems(synced, prefix: "anthropic-skills:")
+        }
 
         let enabled = enabledPluginKeys([
             configDir.appendingPathComponent("settings.json"),
@@ -61,25 +69,71 @@ nonisolated enum ComposerCatalog {
     }
 
     /// Commands (`commands/**/*.md`) then skills (`skills/*/SKILL.md`) of one Claude folder.
-    /// An unreadable command file keeps its name with an empty description.
-    private static func claudeSourceItems(_ base: URL, prefix: String) -> [ComposerCatalogItem] {
+    /// An unreadable command file keeps its name with an empty description. `skipSynced`
+    /// (the user's config folder only) leaves out `skills/synced`.
+    private static func claudeSourceItems(
+        _ base: URL, prefix: String, skipSynced: Bool = false
+    ) -> [ComposerCatalogItem] {
         var items: [ComposerCatalogItem] = []
         for file in walk(base.appendingPathComponent("commands"), fileExtension: "md") {
             items.append(ComposerCatalogItem(
-                trigger: "/", name: prefix + file.components.joined(separator: ":"),
+                trigger: "/", name: prefixed(prefix, file.components.joined(separator: ":")),
                 description: frontmatter(readText(file.url) ?? "")["description"] ?? ""
             ))
         }
-        for skill in childDirectories(base.appendingPathComponent("skills")) {
+        return items + skillItems(base.appendingPathComponent("skills"), prefix: prefix, skipSynced: skipSynced)
+    }
+
+    /// `<skillsDir>/*/SKILL.md`, except user-invocable: false skills and, with `skipSynced`
+    /// (`<configDir>/skills` only), the `synced` folder: synced skills are listed from their
+    /// account's folder only.
+    private static func skillItems(
+        _ skillsDir: URL, prefix: String, skipSynced: Bool = false
+    ) -> [ComposerCatalogItem] {
+        var items: [ComposerCatalogItem] = []
+        for skill in childDirectories(skillsDir) where !(skipSynced && skill.lastPathComponent == "synced") {
             guard let text = readText(skill.appendingPathComponent("SKILL.md")) else { continue }
             let fields = frontmatter(text)
             if fields["user-invocable"]?.lowercased() == "false" { continue }
             let name = fields["name"].flatMap { $0.isEmpty ? nil : $0 } ?? skill.lastPathComponent
             items.append(ComposerCatalogItem(
-                trigger: "/", name: prefix + name, description: fields["description"] ?? ""
+                trigger: "/", name: prefixed(prefix, name), description: fields["description"] ?? ""
             ))
         }
         return items
+    }
+
+    /// A name that already starts with `prefix` keeps it once.
+    private static func prefixed(_ prefix: String, _ name: String) -> String {
+        name.hasPrefix(prefix) ? name : prefix + name
+    }
+
+    /// `<configDir>/skills/synced/<organizationUuid>_<accountUuid>` for the global config's
+    /// `oauthAccount`; nil when either id is missing or not a UUID (they become a path).
+    private static func syncedSkillsFolder(_ configDir: URL, globalConfigFile: URL) -> URL? {
+        guard let root = readJSON(globalConfigFile, limit: maxGlobalConfigFileBytes) as? [String: Any],
+              let account = root["oauthAccount"] as? [String: Any],
+              let organizationID = account["organizationUuid"] as? String, isUUID(organizationID),
+              let accountID = account["accountUuid"] as? String, isUUID(accountID) else { return nil }
+        return configDir.appendingPathComponent("skills").appendingPathComponent("synced")
+            .appendingPathComponent(organizationID + "_" + accountID)
+    }
+
+    /// Exactly 8-4-4-4-12 ASCII hex digits.
+    private static func isUUID(_ value: String) -> Bool {
+        let bytes = Array(value.utf8)
+        guard bytes.count == 36 else { return false }
+        for (index, byte) in bytes.enumerated() {
+            if [8, 13, 18, 23].contains(index) {
+                guard byte == UInt8(ascii: "-") else { return false }
+            } else {
+                let isHex = (UInt8(ascii: "0")...UInt8(ascii: "9")).contains(byte)
+                    || (UInt8(ascii: "a")...UInt8(ascii: "f")).contains(byte)
+                    || (UInt8(ascii: "A")...UInt8(ascii: "F")).contains(byte)
+                guard isHex else { return false }
+            }
+        }
+        return true
     }
 
     /// `enabledPlugins` keys set to true, merged over the settings files (later wins per key).
@@ -435,10 +489,9 @@ nonisolated enum ComposerCatalog {
         return text.hasPrefix("\u{FEFF}") ? String(text.dropFirst()) : text
     }
 
-    /// A JSON config file; nil when missing, invalid or larger than `maxConfigFileBytes`.
-    private static func readJSON(_ url: URL) -> Any? {
-        guard let data = readFile(url, limit: maxConfigFileBytes + 1),
-              data.count <= maxConfigFileBytes else { return nil }
+    /// A JSON config file; nil when missing, invalid or larger than `limit` bytes.
+    private static func readJSON(_ url: URL, limit: Int = maxConfigFileBytes) -> Any? {
+        guard let data = readFile(url, limit: limit + 1), data.count <= limit else { return nil }
         return try? JSONSerialization.jsonObject(with: data)
     }
 
