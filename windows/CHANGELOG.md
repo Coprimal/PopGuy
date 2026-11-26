@@ -9,6 +9,9 @@ Before 1.4.0 Windows had its own versions (0.1.0).
 
 ## [Unreleased]
 
+### Added
+- Composer: image previews above the footer for `@`-mentioned images and Claude Code's `[Image #N]`; click to view larger, x to remove.
+
 ## [1.4.14] - 2026-11-20
 
 ### Fixed

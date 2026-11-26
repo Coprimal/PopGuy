@@ -106,6 +106,13 @@ internal sealed class ComposerController
         return true;
     }
 
+    /// <summary>
+    /// <paramref name="text"/> in the open composer <paramref name="hwnd"/> was just selected by its image strip, not by
+    /// the user: the toolbar does not show for it. UI thread.
+    /// </summary>
+    public bool IsOwnSelection(nint hwnd, string text) =>
+        _open is { } open && open.Window.Hwnd == hwnd && open.Window.IsOwnSelection(text);
+
     // Server lifecycle.
 
     public bool StartServer() => IsServerRunning = _server.Start();
@@ -192,17 +199,21 @@ internal sealed class ComposerController
         var hasSource = foreground.Hwnd != 0 && !foreground.IsOwnProcess;
         var name = hasSource && foreground.DisplayName.Length > 0 ? foreground.DisplayName : null;
         _log($"composer: session {session.Id} shown (source {(hasSource ? "app" : "none")})");
-        Open(text, session, hasSource ? foreground.Hwnd : 0, name, allowSubmit: true, fromPipe: true);
+        // Claude Code's prompt file: its "[Image #N]" placeholders show in the image strip. The name is never logged.
+        var claudePrompt = fileName.StartsWith("claude-prompt", StringComparison.OrdinalIgnoreCase);
+        Open(text, session, hasSource ? foreground.Hwnd : 0, name, allowSubmit: true, fromPipe: true,
+            showsClaudeImageTokens: claudePrompt);
     }
 
     private void Open(
         string text, ComposerSession? session, nint source, string? sourceName, bool allowSubmit, bool fromPipe,
-        string? noTargetHint = null)
+        string? noTargetHint = null, bool showsClaudeImageTokens = false)
     {
-        var window = new ComposerWindow { ImageStore = _images };
+        var window = new ComposerWindow { ImageStore = _images, Log = _log };
         var open = new OpenComposer(window, session, source, Guid.NewGuid(), text, allowSubmit);
         _open = open;
         Volatile.Write(ref _openHwnd, window.Hwnd);
+        window.ShowsClaudeImageTokens = showsClaudeImageTokens;
         window.Text = text;
         window.ComposeMode = session is null;
         window.CanSubmit = allowSubmit;

@@ -52,4 +52,24 @@ public sealed class ComposerAttachmentsTests
         // No adjacent space: the token alone.
         Assert.Equal((2, 9), ComposerAttachments.RemovalRange("a\r@C:\\x.png\rb", 2, 9));
     }
+
+    // The lexical half of the Windows image-path guard (no file system call): a normalized "X:\..." path, or null.
+    [Theory]
+    [InlineData("C:/x.png", @"C:\x.png")]
+    [InlineData(@"d:\a\.\b\..\\c//x.png", @"d:\a\c\x.png")]
+    [InlineData(@"C:\nul.png", null)]
+    [InlineData(@"C:\COM1.tar.png", null)]
+    [InlineData("C:\\COM\u00B9.png", null)]
+    [InlineData(@"C:\a.png:s", null)]
+    [InlineData(@"\\h\s\x.png", null)]
+    [InlineData(@"\\?\C:\x.png", null)]
+    [InlineData(@"C:\a\..\..\x.png", null)]
+    [InlineData("C:x.png", null)]
+    [InlineData(@"C:\a\", null)]
+    public void NormalizesOnlyLocalDriveImagePaths(string path, string? expected)
+    {
+        Assert.Equal(expected, ComposerImagePath.NormalizedDrivePath(path));
+        // On Windows (CI) the framework's normalization agrees on every accepted path.
+        if (expected is not null && OperatingSystem.IsWindows()) Assert.Equal(expected, Path.GetFullPath(path));
+    }
 }

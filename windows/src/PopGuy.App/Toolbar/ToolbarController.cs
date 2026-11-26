@@ -617,6 +617,12 @@ internal sealed class ToolbarController : IDisposable
         var settings = _settings.Current;
         if (!settings.PopGuyEnabled || !IsSource(selection.Source)) return;
         var result = selection.Capture;
+        // The composer's image strip selected a mention in its own editor (its preview would be covered).
+        if (selection.Source.IsOwnProcess && _composer.IsOwnSelection(selection.Source.Hwnd, result.Text))
+        {
+            _log("selection: dropped, composer's own selection");
+            return;
+        }
         var anchor = selection.Anchor;
         var capture = new CapturedSelection(result.Text, result.IsEditable, FirstRect(result.SelectionRects), selection.Source,
             Pointer: anchor.MouseReleasePoint, GrewDownward: anchor.GrewDownward);

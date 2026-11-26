@@ -1,8 +1,9 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
     The Terminal Composer window (macOS ComposerWindow.swift + ComposerView.swift): a find bar (hidden until Ctrl+F),
-    the plain-text editor with the command suggestions over it, and a footer with the source hint, the notices and the
-    buttons. The editor's highlighting, the suggestions and the keys are in ComposerWindow.xaml.cs.
+    the plain-text editor with the command suggestions over it, the image strip, a footer with the source hint, the
+    notices and the buttons, and the image preview overlay. The editor's highlighting, the suggestions and the keys are
+    in ComposerWindow.xaml.cs; the image strip and preview in ComposerWindow.Images.cs.
 -->
 <Window
     x:Class="PopGuy.Composer.ComposerWindow"
@@ -50,6 +51,7 @@
         <Grid.RowDefinitions>
             <RowDefinition Height="Auto" />
             <RowDefinition Height="*" />
+            <RowDefinition Height="Auto" />
             <RowDefinition Height="Auto" />
         </Grid.RowDefinitions>
 
@@ -162,8 +164,27 @@
             </Border>
         </Canvas>
 
-        <Grid
+        <!-- The image strip: a thumbnail per @image mention and a chip per Claude Code [Image #N], built in
+             ComposerWindow.Images.cs; hidden while the text names no image. Aligned with the footer's padding. -->
+        <Border
+            x:Name="ImageStripHost"
             Grid.Row="2"
+            Padding="16,8,16,8"
+            Visibility="Collapsed">
+            <ScrollViewer
+                HorizontalScrollBarVisibility="Auto"
+                HorizontalScrollMode="Auto"
+                VerticalScrollBarVisibility="Disabled"
+                VerticalScrollMode="Disabled">
+                <StackPanel
+                    x:Name="ImageStrip"
+                    Orientation="Horizontal"
+                    Spacing="8" />
+            </ScrollViewer>
+        </Border>
+
+        <Grid
+            Grid.Row="3"
             Padding="16,10,16,10"
             BorderBrush="{ThemeResource DividerStrokeColorDefaultBrush}"
             BorderThickness="0,1,0,0">
@@ -238,6 +259,78 @@
                     Style="{StaticResource AccentButtonStyle}" />
                 <Button x:Name="DoneSubmitButton" Content="Done &amp; Submit" />
             </StackPanel>
+        </Grid>
+
+        <!-- The image preview: an in-window overlay over every row (last child, so its scrim covers the strip and the
+             footer), with a card holding the large image, its file name and a close button. The image area keeps its
+             size while the image loads; the ring fades in from code after a short delay. Opened and closed in
+             ComposerWindow.Images.cs, which sizes the image area to the window (no minimum here: the card must fit a
+             window at its minimum size; the margin and padding are mirrored there). -->
+        <Grid
+            x:Name="ImagePreview"
+            Grid.Row="0"
+            Grid.RowSpan="4"
+            Visibility="Collapsed">
+            <Border x:Name="ImagePreviewScrim" Background="{ThemeResource SmokeFillColorDefaultBrush}" />
+            <Border
+                Margin="24"
+                Padding="12"
+                HorizontalAlignment="Center"
+                VerticalAlignment="Center"
+                Background="{ThemeResource SolidBackgroundFillColorBaseBrush}"
+                BorderBrush="{ThemeResource SurfaceStrokeColorFlyoutBrush}"
+                BorderThickness="1"
+                CornerRadius="8">
+                <Grid RowSpacing="8">
+                    <Grid.RowDefinitions>
+                        <RowDefinition Height="Auto" />
+                        <RowDefinition Height="*" />
+                    </Grid.RowDefinitions>
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                    </Grid.ColumnDefinitions>
+
+                    <TextBlock
+                        x:Name="ImagePreviewCaption"
+                        Grid.Row="0"
+                        Margin="0,0,8,0"
+                        VerticalAlignment="Center"
+                        Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                        Style="{StaticResource CaptionTextBlockStyle}"
+                        TextTrimming="CharacterEllipsis"
+                        TextWrapping="NoWrap" />
+                    <Button
+                        x:Name="ImagePreviewClose"
+                        Grid.Row="0"
+                        Grid.Column="1"
+                        Style="{StaticResource SubtleButtonStyle}">
+                        <FontIcon FontSize="12" Glyph="&#xE711;" />
+                    </Button>
+
+                    <Grid
+                        x:Name="ImagePreviewArea"
+                        Grid.Row="1"
+                        Grid.ColumnSpan="2">
+                        <Image x:Name="ImagePreviewImage" Stretch="Uniform" />
+                        <ProgressRing
+                            x:Name="ImagePreviewRing"
+                            Width="32"
+                            Height="32"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            IsActive="True"
+                            Opacity="0" />
+                        <TextBlock
+                            x:Name="ImagePreviewError"
+                            HorizontalAlignment="Center"
+                            VerticalAlignment="Center"
+                            Foreground="{ThemeResource TextFillColorSecondaryBrush}"
+                            Text="Can't show this image"
+                            Visibility="Collapsed" />
+                    </Grid>
+                </Grid>
+            </Border>
         </Grid>
     </Grid>
 </Window>

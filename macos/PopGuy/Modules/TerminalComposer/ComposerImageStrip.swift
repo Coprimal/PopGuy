@@ -242,6 +242,7 @@ final class ComposerImageStripModel: ObservableObject {
         previewClickTime = nil
         #endif
         editor.setLocked(false)
+        editor.refreshOwnSelection()
         if let textView = editor.textView {
             textView.window?.makeFirstResponder(textView)
         }

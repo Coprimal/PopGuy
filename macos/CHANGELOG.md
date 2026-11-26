@@ -15,6 +15,9 @@ heading, which the release body shows under `## Windows`.
 <!-- Add entries here as you work. On release, rename this to `## [X.Y.Z] - YYYY-MM-DD`
      and start a fresh [Unreleased] section above it. -->
 
+### Added
+- Composer: image previews above the footer for `@`-mentioned images and Claude Code's `[Image #N]`; click to view larger, x to remove.
+
 ## [1.4.14] - 2026-11-20
 
 ### Fixed

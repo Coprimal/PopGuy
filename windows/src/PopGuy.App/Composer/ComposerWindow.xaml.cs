@@ -28,8 +28,8 @@ namespace PopGuy.Composer;
 /// <see cref="RichEditBox"/> (paste and copy are plain text) with simple Markdown highlighting from
 /// <see cref="MarkdownHighlighter"/>: a heading line bold at the base size, code monospace on a subtle background,
 /// bold and italic as their traits, list markers and fence lines dimmed. Keys: Ctrl+Enter Done, Ctrl+Shift+Enter Done
-/// &amp; Submit, Esc Cancel (closes the suggestions, then the find bar first), Ctrl+F find; Tab / Shift+Tab indent /
-/// outdent a list item. In a CLI session, a command or skill typed with its trigger ("/" or "$") shows the CLI's matching
+/// &amp; Submit, Esc Cancel (closes the image preview, the suggestions, then the find bar first), Ctrl+F find;
+/// Tab / Shift+Tab indent / outdent a list item. In a CLI session, a command or skill typed with its trigger ("/" or "$") shows the CLI's matching
 /// <see cref="CatalogItem"/>s at the caret (<see cref="CommandSuggestions"/>): Up/Down select, Enter/Tab or a click accept.
 /// Pasting an image (or copied image files) inserts "@path" mentions (<see cref="ComposerImageStore"/>). Unlike the toolbar, the composer takes the
 /// foreground. One window per session: the controller makes it, answers its requests and closes it with
@@ -151,6 +151,7 @@ public sealed partial class ComposerWindow : Window
         AppWindow.Closing += OnAppWindowClosing;
         Activated += OnActivated;
         Closed += OnClosed;
+        InitializeImages();
 
         UpdateFooter();
     }
@@ -194,6 +195,7 @@ public sealed partial class ComposerWindow : Window
             Editor.TextDocument.ClearUndoRedoHistory();
             // The caret at the end, to go on writing.
             Editor.TextDocument.Selection.SetRange(_highlighted.Length, _highlighted.Length);
+            RefreshImageStrip();
         }
     }
 
@@ -480,6 +482,7 @@ public sealed partial class ComposerWindow : Window
     /// </summary>
     private void Done()
     {
+        ClosePreview();
         HideSuggestions();
         var text = Text;
         if (CopyOnly)
@@ -498,6 +501,7 @@ public sealed partial class ComposerWindow : Window
 
     private void DoneAndSubmit()
     {
+        ClosePreview();
         HideSuggestions();
         if (CopyOnly || !_canSubmit) return;
         if (Encoding.UTF8.GetByteCount(Text) > ComposerMessage.MaxTextBytes)
@@ -518,6 +522,17 @@ public sealed partial class ComposerWindow : Window
     {
         var control = IsDown(VirtualKey.Control);
         var shift = IsDown(VirtualKey.Shift);
+        // The image preview takes the keys first: Esc closes it, Ctrl+Enter goes on to Done (which closes it first). The
+        // focused close button keeps Enter and Space, Alt+F4 still closes the window; every other key is swallowed, so
+        // nothing reaches the editor (or Find, undo, paste) under the scrim.
+        if (IsPreviewOpen && !(e.Key == VirtualKey.Enter && control))
+        {
+            if (e.Key == VirtualKey.Escape) ClosePreview();
+            else if (e.Key is VirtualKey.Enter or VirtualKey.Space && ImagePreviewClose.FocusState != FocusState.Unfocused) return;
+            else if (e.Key == VirtualKey.F4 && IsDown(VirtualKey.Menu)) return;
+            e.Handled = true;
+            return;
+        }
         if (e.Key == VirtualKey.Enter && control)
         {
             e.Handled = true;
@@ -620,6 +635,8 @@ public sealed partial class ComposerWindow : Window
         }
         _highlighted = RawText();
         UpdateFooter();
+        // The highlight timer is stopped: the strip follows the undone or redone text here.
+        if (_highlighted != _stripText) RefreshImageStrip();
     }
 
     // Paste: plain text, or "@path" mentions for an image or copied image files.
@@ -719,6 +736,8 @@ public sealed partial class ComposerWindow : Window
         if (_closed) return;
         if (RawText() != _highlighted) Highlight();
         UpdateFooter();
+        // Also past the highlighter's size limit; a text the strip already shows is not parsed again.
+        if (RawText() != _stripText) RefreshImageStrip();
         TextEdited?.Invoke();
     }
 

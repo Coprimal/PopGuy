@@ -177,6 +177,16 @@ final class ComposerEditorHandle {
         textView.window?.makeFirstResponder(textView)
     }
 
+    /// Counts the selection `select` made as the editor's own again from now while it is still
+    /// selected: the mouse-up of a click that closes the preview would otherwise show the toolbar.
+    func refreshOwnSelection() {
+        guard let textView, let last = Self.lastSelection else { return }
+        let range = textView.selectedRange()
+        guard Self.isValid(range, in: textView),
+              (textView.string as NSString).substring(with: range) == last.text else { return }
+        Self.lastSelection = (last.text, .now)
+    }
+
     /// Deletes `range` as one undoable "Remove Image" edit, caret at its start.
     /// Does nothing while locked, during IME composition, or for an invalid or empty range.
     func remove(_ range: NSRange) {
