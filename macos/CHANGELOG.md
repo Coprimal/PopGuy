@@ -15,8 +15,13 @@ heading, which the release body shows under `## Windows`.
 <!-- Add entries here as you work. On release, rename this to `## [X.Y.Z] - YYYY-MM-DD`
      and start a fresh [Unreleased] section above it. -->
 
+
+## [1.4.15] - 2026-11-26
+
 ### Added
-- Composer: image previews above the footer for `@`-mentioned images and Claude Code's `[Image #N]`; click to view larger, x to remove.
+- Terminal Composer: typing `/` at the start of a prompt (Claude Code) or `$` (Codex) now lists your commands and skills, including the skills synced from claude.ai; Up/Down, Return, Tab or a click inserts one and Esc closes the list.
+- Terminal Composer: a strip above the footer previews the images in your text. Pasted images show as short `[Pasted image #N]` badges (the full path goes back to the terminal when you press Done) and appear as thumbnails with the same name in a small ribbon; images mentioned with `@` get a thumbnail, and Claude Code's own `[Image #N]` gets a chip. Click one to view it larger, hover and click the x to remove it (Cmd+Z brings it back).
+- Terminal Composer: hovering an image in the strip or a badge in the text shows its full path.
 
 ## [1.4.14] - 2026-11-20
 
