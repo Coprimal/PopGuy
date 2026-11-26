@@ -159,10 +159,11 @@ final class ComposerImageStripModel: ObservableObject {
     }
 
     private nonisolated static func existingFiles(among paths: Set<String>) -> Set<String> {
+        // Keyed by the mention's own path; only the resolved one is checked.
         paths.filter { path in
-            guard ComposerThumbnailLoader.isLocalPath(path) else { return false }
-            var isDirectory: ObjCBool = false
-            return FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) && !isDirectory.boolValue
+            guard let resolved = ComposerThumbnailLoader.resolvedLocalPath(path) else { return false }
+            let url = URL(fileURLWithPath: resolved, isDirectory: false)
+            return (try? url.resourceValues(forKeys: [.isRegularFileKey]))?.isRegularFile == true
         }
     }
 

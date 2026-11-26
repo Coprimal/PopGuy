@@ -57,8 +57,42 @@ struct ComposerAttachmentsTests {
     func localPathsOnly() {
         #expect(ComposerThumbnailLoader.isLocalPath("/tmp/x.png"))
         for path in ["/net/host/x.png", "/NET/host/x.png", "/Network/Servers/h/x.png", "/VOLUMES/NoSuchVolume-PopGuy/x.png", "/Users/a/../../net/h/x.png",
-                     "//host/x.png", "/private/var/automount/x.png", "/Volumes/NoSuchVolume-PopGuy/x.png", "x.png"] {
+                     "//host/x.png", "/private/var/automount/x.png", "/Volumes/NoSuchVolume-PopGuy/x.png", "/home/u/x.png", "x.png",
+                     "/home", "/System/Volumes",
+                     // APFS folds U+017F to "s": these name /System/Volumes/Data and /Volumes.
+                     "/\u{17F}ystem/Volumes/Data/x.png", "/Volume\u{17F}/NoSuchVolume-PopGuy/x.png"] {
             #expect(!ComposerThumbnailLoader.isLocalPath(path), "\(path)")
         }
+    }
+
+    @Test("symlinks are followed one component at a time and never into a network tree")
+    func resolvedLocalPathFollowsLinksSafely() throws {
+        let fileManager = FileManager.default
+        let dir = fileManager.temporaryDirectory.appendingPathComponent("PopGuyTests-\(UUID().uuidString)").path
+        try fileManager.createDirectory(atPath: dir, withIntermediateDirectories: true)
+        defer { try? fileManager.removeItem(atPath: dir) }
+        // The temporary directory sits under /var, itself a symlink: compare physical paths.
+        let physicalDir = try #require(realpath(dir, nil).map { pointer in
+            defer { free(pointer) }
+            return String(cString: pointer)
+        })
+        let image = "\(dir)/img.png"
+        #expect(fileManager.createFile(atPath: image, contents: Data([0])))
+        try fileManager.createSymbolicLink(atPath: "\(dir)/alias.png", withDestinationPath: image)
+        try fileManager.createSymbolicLink(atPath: "\(dir)/x", withDestinationPath: "/Network/Servers/h")
+        try fileManager.createSymbolicLink(atPath: "\(dir)/link", withDestinationPath: "/Network/Servers/foo")
+        // Refused trees that exist and lead back to the image through the Data firmlink:
+        // only the guard (not a missing path) can make these nil.
+        try fileManager.createSymbolicLink(atPath: "\(dir)/sys", withDestinationPath: "/System/Volumes/Data")
+        try fileManager.createSymbolicLink(atPath: "\(dir)/fold", withDestinationPath: "/\u{17F}ystem/Volumes/Data")
+        #expect(fileManager.fileExists(atPath: "/System/Volumes/Data\(physicalDir)/img.png"))
+
+        #expect(ComposerThumbnailLoader.resolvedLocalPath(image) == "\(physicalDir)/img.png")
+        #expect(ComposerThumbnailLoader.resolvedLocalPath("\(dir)/alias.png") == "\(physicalDir)/img.png")
+        // A link used as a directory, and a link followed by "..": both lead into /Network.
+        #expect(ComposerThumbnailLoader.resolvedLocalPath("\(dir)/x/img.png") == nil)
+        #expect(ComposerThumbnailLoader.resolvedLocalPath("\(dir)/link/../img.png") == nil)
+        #expect(ComposerThumbnailLoader.resolvedLocalPath("\(dir)/sys\(physicalDir)/img.png") == nil)
+        #expect(ComposerThumbnailLoader.resolvedLocalPath("\(dir)/fold\(physicalDir)/img.png") == nil)
     }
 }
