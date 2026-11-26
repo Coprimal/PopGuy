@@ -3,7 +3,8 @@
 // macos/PopGuy/Modules/TerminalComposer/ComposerProtocol.swift.
 //
 // Wire protocol: JSON lines over a same-user named pipe, UTF-8, one message per "\n".
-//   client -> app: open, then written (after it wrote the "done" text to the file)
+//   client -> app: open, then optionally one catalog (the CLI's "/" or "$" items), then written (after it wrote the
+//   "done" text to the file)
 //   app -> client: done | cancel | busy | error
 // Message text is LF-only and never logged.
 
@@ -28,6 +29,15 @@ public abstract record ComposerMessage
     public sealed record Busy : ComposerMessage;
     /// <summary>App -> client: the app refused the request (e.g. the feature is off).</summary>
     public sealed record Error(string Reason) : ComposerMessage;
+    /// <summary>Client -> app: the calling CLI's (<c>Agent</c>) commands and skills, for the composer's suggestions.</summary>
+    public sealed record Catalog(string Agent, IReadOnlyList<CatalogItem> Items) : ComposerMessage
+    {
+        // Items compare by value, not by list reference.
+        public bool Equals(Catalog? other) =>
+            other is not null && Agent == other.Agent && Items.SequenceEqual(other.Items);
+
+        public override int GetHashCode() => HashCode.Combine(Agent, Items.Count);
+    }
 
     /// <summary>Cap on the UTF-8 size of a message's text (and of the file the CLI reads).</summary>
     public const int MaxTextBytes = 1_048_576;
@@ -35,6 +45,10 @@ public abstract record ComposerMessage
     /// <see cref="MaxTextBytes"/> (worst case 6x: a control character becomes "\u00XX"; an emoji, which the encoder
     /// always escapes as a surrogate pair, 3x); framed reads stop at this many bytes.</summary>
     public const int MaxLineBytes = 8 * 1_048_576;
+    /// <summary>Catalog caps: item count, and an item's name and description length in chars.</summary>
+    public const int MaxCatalogItems = 500;
+    public const int MaxItemNameLength = 128;
+    public const int MaxItemDescriptionLength = 300;
 
     // Source-generated (trim safe). The relaxed encoder writes non-ASCII BMP text as UTF-8 instead of "\uXXXX".
     private static readonly ComposerJsonContext Json = new(new JsonSerializerOptions
@@ -49,6 +63,8 @@ public abstract record ComposerMessage
     {
         if (message.PayloadText is { } text && Encoding.UTF8.GetByteCount(text) > MaxTextBytes)
             throw new ComposerProtocolException(ComposerProtocolError.TextTooLarge);
+        if (message is Catalog catalog && !IsValid(catalog))
+            throw new ComposerProtocolException(ComposerProtocolError.InvalidCatalog);
         var json = JsonSerializer.SerializeToUtf8Bytes(message.ToWire(), Json.ComposerWire);
         if (json.Length > MaxLineBytes)
             throw new ComposerProtocolException(ComposerProtocolError.LineTooLarge);
@@ -76,8 +92,24 @@ public abstract record ComposerMessage
         var message = FromWire(wire) ?? throw new ComposerProtocolException(ComposerProtocolError.Malformed);
         if (message.PayloadText is { } text && Encoding.UTF8.GetByteCount(text) > MaxTextBytes)
             throw new ComposerProtocolException(ComposerProtocolError.TextTooLarge);
+        if (message is Catalog catalog && !IsValid(catalog))
+            throw new ComposerProtocolException(ComposerProtocolError.InvalidCatalog);
         return message;
     }
+
+    private static readonly string[] CatalogAgents = ["claude", "codex", "gemini"];
+
+    /// <summary>The caps: a known agent, at most <see cref="MaxCatalogItems"/> items, each with a "/" or "$" trigger,
+    /// a non-empty one-word name and a one-line description.</summary>
+    private static bool IsValid(Catalog catalog) =>
+        CatalogAgents.Contains(catalog.Agent)
+        && catalog.Items.Count <= MaxCatalogItems
+        && catalog.Items.All(item =>
+            item.Trigger is "/" or "$"
+            && item.Name.Length is > 0 and <= MaxItemNameLength
+            && !item.Name.Any(c => char.IsWhiteSpace(c) || char.IsControl(c))
+            && item.Description.Length <= MaxItemDescriptionLength
+            && !item.Description.Any(c => char.IsControl(c) || c is '\u2028' or '\u2029'));
 
     private string? PayloadText => this switch
     {
@@ -94,6 +126,8 @@ public abstract record ComposerMessage
         Cancel => new ComposerWire("cancel"),
         Busy => new ComposerWire("busy"),
         Error m => new ComposerWire("error", Reason: m.Reason),
+        Catalog m => new ComposerWire("catalog", Agent: m.Agent,
+            Items: m.Items.Select(item => new ComposerWireItem(item.Trigger, item.Name, item.Description)).ToArray()),
         _ => throw new InvalidOperationException("Unknown composer message"),
     };
 
@@ -106,9 +140,27 @@ public abstract record ComposerMessage
         { Type: "cancel" } => new Cancel(),
         { Type: "busy" } => new Busy(),
         { Type: "error", Reason: { } reason } => new Error(reason),
+        { Type: "catalog", Agent: { } agent, Items: { } items } => CatalogFromWire(agent, items),
         _ => null,
     };
+
+    /// <summary>The catalog, or null when an item is null or misses a field.</summary>
+    private static Catalog? CatalogFromWire(string agent, ComposerWireItem?[] items)
+    {
+        var result = new CatalogItem[items.Length];
+        for (var i = 0; i < items.Length; i++)
+        {
+            if (items[i] is not { Trigger: { } trigger, Name: { } name, Description: { } description })
+                return null;
+            result[i] = new CatalogItem(trigger, name, description);
+        }
+        return new Catalog(agent, result);
+    }
 }
+
+/// <summary>One "/" or "$" suggestion of a <see cref="ComposerMessage.Catalog"/>: <c>Name</c> is inserted after
+/// <c>Trigger</c>; <c>Description</c> is shown only.</summary>
+public sealed record CatalogItem(string Trigger, string Name, string Description);
 
 /// <summary>The JSON shape of every message: <c>type</c> plus the fields that type uses.</summary>
 internal sealed record ComposerWire(
@@ -117,7 +169,15 @@ internal sealed record ComposerWire(
     [property: JsonPropertyName("fileName")] string? FileName = null,
     [property: JsonPropertyName("mode")] string? Mode = null,
     [property: JsonPropertyName("submit")] bool? Submit = null,
-    [property: JsonPropertyName("reason")] string? Reason = null);
+    [property: JsonPropertyName("reason")] string? Reason = null,
+    [property: JsonPropertyName("agent")] string? Agent = null,
+    [property: JsonPropertyName("items")] ComposerWireItem?[]? Items = null);
+
+/// <summary>The JSON shape of one catalog item.</summary>
+internal sealed record ComposerWireItem(
+    [property: JsonPropertyName("trigger")] string? Trigger,
+    [property: JsonPropertyName("name")] string? Name,
+    [property: JsonPropertyName("description")] string? Description);
 
 [JsonSerializable(typeof(ComposerWire))]
 internal sealed partial class ComposerJsonContext : JsonSerializerContext;
@@ -128,6 +188,8 @@ public enum ComposerProtocolError
     TextTooLarge,
     /// <summary>Not JSON, an unknown type, or a missing field.</summary>
     Malformed,
+    /// <summary>A catalog that breaks the caps (agent, item count, trigger, name or description).</summary>
+    InvalidCatalog,
 }
 
 public sealed class ComposerProtocolException(ComposerProtocolError error, Exception? inner = null)

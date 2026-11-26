@@ -18,5 +18,6 @@
   <ItemGroup>
     <!-- Linked, not a project reference to Core, to keep the exe small. -->
     <Compile Include="..\PopGuy.Core\Composer\ComposerProtocol.cs" Link="Composer\ComposerProtocol.cs" />
+    <Compile Include="..\PopGuy.Core\Composer\ComposerCatalog.cs" Link="Composer\ComposerCatalog.cs" />
   </ItemGroup>
 </Project>

@@ -5,6 +5,8 @@
 // ComposerProtocol.swift, MIRROR of macos/PopGuyEdit/ComposerProtocol.swift).
 // Covers:
 //   - Codec contract: golden lines for every message type, unknown type and caps rejected
+//   - Catalog caps: too many items and an invalid item name are rejected
+//   - Mirror: the app and popguy-edit copies of the shared files are byte-identical
 //   - Security: directories, FIFOs, oversized and non-UTF-8 files are refused
 //   - Trailing-newline and line-ending rule: LF and CRLF files round-trip byte-identical
 
@@ -30,6 +32,10 @@ struct ComposerProtocolTests {
         (#"{"type":"written"}"#, .written),
         (#"{"type":"error","reason":"Terminal Composer is off"}"#,
          .error(reason: "Terminal Composer is off")),
+        (#"{"type":"catalog","agent":"codex","items":[{"trigger":"$","name":"cf-plan","description":"Plan a feature"}]}"#,
+         .catalog(agent: "codex", items: [
+            ComposerCatalogItem(trigger: "$", name: "cf-plan", description: "Plan a feature"),
+         ])),
     ]
 
     @Test("golden lines decode, and every message round-trips as one line")
@@ -48,6 +54,36 @@ struct ComposerProtocolTests {
             let encoded = try JSONSerialization.jsonObject(with: line.dropLast()) as? NSDictionary
             let reference = try JSONSerialization.jsonObject(with: Data(golden.utf8)) as? NSDictionary
             #expect(encoded != nil && encoded == reference)
+        }
+    }
+
+    @Test("a catalog with \"/\" items decodes")
+    func slashCatalogDecodes() throws {
+        // Decode only: Swift's JSON encoder writes "/" as "\/", so the line does not round-trip.
+        let line = #"{"type":"catalog","agent":"claude","items":[{"trigger":"/","name":"coding-friend:cf-plan","description":"Plan"}]}"#
+        #expect(try ComposerMessage.decodeLine(Data(line.utf8)) == .catalog(agent: "claude", items: [
+            ComposerCatalogItem(trigger: "/", name: "coding-friend:cf-plan", description: "Plan"),
+        ]))
+    }
+
+    @Test("a catalog over the item cap or with a name containing a space is rejected")
+    func catalogCapsEnforced() throws {
+        let item = ComposerCatalogItem(trigger: "$", name: "cf-plan", description: "Plan")
+        let tooMany = ComposerMessage.catalog(
+            agent: "codex", items: Array(repeating: item, count: ComposerMessage.maxCatalogItems + 1)
+        )
+        let spacedName = ComposerMessage.catalog(
+            agent: "codex", items: [ComposerCatalogItem(trigger: "$", name: "cf plan", description: "Plan")]
+        )
+        for message in [tooMany, spacedName] {
+            #expect(throws: ComposerProtocolError.invalidCatalog) {
+                try ComposerMessage.encodeLine(message)
+            }
+            // The plain encoder skips the caps, as a bad producer would.
+            let line = try JSONEncoder().encode(message)
+            #expect(throws: ComposerProtocolError.invalidCatalog) {
+                try ComposerMessage.decodeLine(line)
+            }
         }
     }
 
@@ -138,6 +174,26 @@ struct ComposerProtocolTests {
         let missing = dir.appendingPathComponent("missing.md")
         #expect(try ComposerFileRules.read(path: missing.path)
             == ComposerFileContent(text: "", hadTrailingNewline: false, lineEnding: .lf))
+    }
+
+    // MARK: - Mirror
+
+    // Files shared by popguy-edit and the app, as paths under macos/ (popguy-edit, app).
+    private static let mirrorPairs: [(String, String)] = [
+        ("PopGuyEdit/ComposerProtocol.swift", "PopGuy/Modules/TerminalComposer/ComposerProtocol.swift"),
+        ("PopGuyEdit/ComposerCatalog.swift", "PopGuy/Modules/TerminalComposer/ComposerCatalog.swift"),
+    ]
+
+    @Test("popguy-edit and app mirror files are byte-identical")
+    func mirrorsIdentical() throws {
+        // This file is macos/PopGuyTests/Unit/ComposerProtocolTests.swift.
+        let macos = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent().deletingLastPathComponent().deletingLastPathComponent()
+        for (edit, app) in Self.mirrorPairs {
+            let editData = try Data(contentsOf: macos.appendingPathComponent(edit))
+            let appData = try Data(contentsOf: macos.appendingPathComponent(app))
+            #expect(editData == appData, "\(edit) and \(app) differ")
+        }
     }
 
     // MARK: - Helpers

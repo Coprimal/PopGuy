@@ -263,8 +263,8 @@ nonisolated final class ComposerServer: @unchecked Sendable {
         switch message {
         case .done: closeAfter = false
         case .cancel, .busy, .error: closeAfter = true
-        case .open, .written:
-            Self.log.fault("Composer: open and written are not replies")
+        case .open, .catalog, .written:
+            Self.log.fault("Composer: open, catalog and written are not replies")
             return
         }
         connection.state = .session(session, replied: true)

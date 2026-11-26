@@ -6,7 +6,8 @@
 // compiles in the command-line tool target too.
 //
 // Wire protocol: JSON lines over a same-user AF_UNIX socket, UTF-8, one message per "\n".
-//   client -> app: open, then written (after it wrote the "done" text to the file)
+//   client -> app: open, then catalog (optional: the calling agent's "/" or "$" commands),
+//                  then written (after it wrote the "done" text to the file)
 //   app -> client: done | cancel | busy | error
 // Message text is LF-only and never logged.
 
@@ -20,6 +21,8 @@ nonisolated enum ComposerMessage: Codable, Equatable, Sendable {
 
     /// Client -> app: edit `text` (the file's display text) in the composer.
     case open(text: String, fileName: String, mode: String)
+    /// Client -> app: the calling agent's commands, sent after `open` for suggestions.
+    case catalog(agent: String, items: [ComposerCatalogItem])
     /// App -> client: the user finished; write `text` back. `submit` asks the caller to submit.
     case done(text: String, submit: Bool)
     /// Client -> app: the "done" text was written to the file (sent just before exiting).
@@ -36,13 +39,17 @@ nonisolated enum ComposerMessage: Codable, Equatable, Sendable {
     /// Cap on one encoded line, without its "\n". JSON escaping inflates text, so it is
     /// larger than `maxTextBytes`; framed reads stop at this many bytes.
     static let maxLineBytes = 8 * 1_048_576
+    /// Catalog caps: item count, and item name and description length in UTF-16 code units.
+    static let maxCatalogItems = 500
+    static let maxItemNameLength = 128
+    static let maxItemDescriptionLength = 300
+    static let catalogAgents: Set<String> = ["claude", "codex", "gemini"]
+    static let catalogTriggers: Set<String> = ["/", "$"]
 
     /// Encodes one message as a JSON line terminated by "\n". The JSON encoder escapes
     /// newlines inside strings, so the only raw "\n" is the terminator.
     static func encodeLine(_ message: ComposerMessage) throws -> Data {
-        if let text = message.text, text.utf8.count > maxTextBytes {
-            throw ComposerProtocolError.textTooLarge
-        }
+        try checkCaps(message)
         var line = try JSONEncoder().encode(message)
         guard line.count <= maxLineBytes else { throw ComposerProtocolError.lineTooLarge }
         line.append(0x0A)
@@ -54,23 +61,51 @@ nonisolated enum ComposerMessage: Codable, Equatable, Sendable {
         let body = line.last == 0x0A ? line.dropLast() : line
         guard body.count <= maxLineBytes else { throw ComposerProtocolError.lineTooLarge }
         let message = try JSONDecoder().decode(ComposerMessage.self, from: body)
+        try checkCaps(message)
+        return message
+    }
+
+    /// The text cap for every message, and the catalog caps. The producer sanitizes a
+    /// catalog before encoding, so a catalog that breaks a cap is a protocol error.
+    private static func checkCaps(_ message: ComposerMessage) throws {
         if let text = message.text, text.utf8.count > maxTextBytes {
             throw ComposerProtocolError.textTooLarge
         }
-        return message
+        if case .catalog(let agent, let items) = message {
+            guard catalogAgents.contains(agent), items.count <= maxCatalogItems,
+                  items.allSatisfy(isValidCatalogItem) else {
+                throw ComposerProtocolError.invalidCatalog
+            }
+        }
+    }
+
+    /// Valid item: a known trigger; a non-empty name without whitespace or control
+    /// characters; a description without control characters or line separators.
+    /// Lengths are UTF-16 code units, as on Windows.
+    private static func isValidCatalogItem(_ item: ComposerCatalogItem) -> Bool {
+        guard catalogTriggers.contains(item.trigger),
+              !item.name.isEmpty, item.name.utf16.count <= maxItemNameLength,
+              item.description.utf16.count <= maxItemDescriptionLength else { return false }
+        let nameOK = item.name.unicodeScalars.allSatisfy {
+            !$0.properties.isWhitespace && $0.properties.generalCategory != .control
+        }
+        let descriptionOK = item.description.unicodeScalars.allSatisfy {
+            $0.properties.generalCategory != .control && $0 != "\u{2028}" && $0 != "\u{2029}"
+        }
+        return nameOK && descriptionOK
     }
 
     private var text: String? {
         switch self {
         case .open(let text, _, _), .done(let text, _): return text
-        case .written, .cancel, .busy, .error: return nil
+        case .catalog, .written, .cancel, .busy, .error: return nil
         }
     }
 
     // MARK: Coding
 
     private enum CodingKeys: String, CodingKey {
-        case type, text, fileName, mode, submit, reason
+        case type, text, fileName, mode, submit, reason, agent, items
     }
 
     init(from decoder: any Decoder) throws {
@@ -82,6 +117,11 @@ nonisolated enum ComposerMessage: Codable, Equatable, Sendable {
                 text: try container.decode(String.self, forKey: .text),
                 fileName: try container.decode(String.self, forKey: .fileName),
                 mode: try container.decode(String.self, forKey: .mode)
+            )
+        case "catalog":
+            self = .catalog(
+                agent: try container.decode(String.self, forKey: .agent),
+                items: try container.decode([ComposerCatalogItem].self, forKey: .items)
             )
         case "done":
             self = .done(
@@ -111,6 +151,10 @@ nonisolated enum ComposerMessage: Codable, Equatable, Sendable {
             try container.encode(text, forKey: .text)
             try container.encode(fileName, forKey: .fileName)
             try container.encode(mode, forKey: .mode)
+        case .catalog(let agent, let items):
+            try container.encode("catalog", forKey: .type)
+            try container.encode(agent, forKey: .agent)
+            try container.encode(items, forKey: .items)
         case .done(let text, let submit):
             try container.encode("done", forKey: .type)
             try container.encode(text, forKey: .text)
@@ -128,9 +172,18 @@ nonisolated enum ComposerMessage: Codable, Equatable, Sendable {
     }
 }
 
+/// One suggestion of a `catalog` message: `trigger` ("/" or "$") followed by `name`.
+nonisolated struct ComposerCatalogItem: Codable, Equatable, Sendable {
+    let trigger: String
+    let name: String
+    let description: String
+}
+
 nonisolated enum ComposerProtocolError: Error, Equatable, Sendable {
     case lineTooLarge
     case textTooLarge
+    /// A catalog breaks a cap or names an unknown agent.
+    case invalidCatalog
 }
 
 // MARK: - File rules

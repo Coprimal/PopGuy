@@ -20,6 +20,8 @@ public sealed class ComposerProtocolTests
         { """{"type":"busy"}""", new ComposerMessage.Busy() },
         { """{"type":"written"}""", new ComposerMessage.Written() },
         { """{"type":"error","reason":"Terminal Composer is off"}""", new ComposerMessage.Error("Terminal Composer is off") },
+        { """{"type":"catalog","agent":"codex","items":[{"trigger":"$","name":"cf-plan","description":"Plan a feature"}]}""",
+          new ComposerMessage.Catalog("codex", [new CatalogItem("$", "cf-plan", "Plan a feature")]) },
     };
 
     [Theory]
@@ -43,6 +45,9 @@ public sealed class ComposerProtocolTests
     public void ReadsSwiftEscapesAndWritesNonAsciiUnescaped()
     {
         Assert.Equal(new ComposerMessage.Error("a/b"), ComposerMessage.DecodeLine("""{"type":"error","reason":"a\/b"}"""u8.ToArray()));
+        // A "/" catalog item: Swift may escape it as "\/", .NET writes it raw, so this line is decode-only.
+        Assert.Equal(new ComposerMessage.Catalog("claude", [new CatalogItem("/", "coding-friend:cf-plan", "Plan")]),
+            ComposerMessage.DecodeLine("""{"type":"catalog","agent":"claude","items":[{"trigger":"/","name":"coding-friend:cf-plan","description":"Plan"}]}"""u8.ToArray()));
 
         // The relaxed encoder keeps non-ASCII BMP text as UTF-8 (not "\uXXXX"), so lines stay close to the text's
         // size; an emoji is still written as an escaped surrogate pair, which decodes back.
@@ -69,6 +74,19 @@ public sealed class ComposerProtocolTests
         var bigLine = Encoding.UTF8.GetBytes("{\"type\":\"done\",\"submit\":false,\"text\":\"" + bigText + "\"}");
         Assert.Equal(ComposerProtocolError.TextTooLarge,
             Assert.Throws<ComposerProtocolException>(() => ComposerMessage.DecodeLine(bigLine)).Error);
+    }
+
+    [Fact]
+    public void CatalogsBreakingTheCapsAreRejected()
+    {
+        var tooMany = new ComposerMessage.Catalog("codex",
+            Enumerable.Range(0, ComposerMessage.MaxCatalogItems + 1).Select(i => new CatalogItem("$", $"skill-{i}", "")).ToArray());
+        Assert.Equal(ComposerProtocolError.InvalidCatalog,
+            Assert.Throws<ComposerProtocolException>(() => ComposerMessage.EncodeLine(tooMany)).Error);
+
+        var spacedName = """{"type":"catalog","agent":"claude","items":[{"trigger":"/","name":"cf plan","description":"Plan"}]}"""u8.ToArray();
+        Assert.Equal(ComposerProtocolError.InvalidCatalog,
+            Assert.Throws<ComposerProtocolException>(() => ComposerMessage.DecodeLine(spacedName)).Error);
     }
 
     [Fact]

@@ -3,6 +3,7 @@
 // until the composer replies: "done" writes the text back in place, tells the app "written" and exits 0; cancel, busy,
 // error or a closed connection exit 1 and leave the file untouched; a failed write exits 1 without "written".
 // The text itself is never printed. Same flow as macos/PopGuyEdit/main.swift.
+// After "open" it also sends the calling agent's "/" or "$" catalog in the background (AgentCatalogSender.cs).
 
 using System.Diagnostics;
 using System.IO.Pipes;
@@ -42,6 +43,20 @@ internal static partial class Program
     [SupportedOSPlatform("windows")]
     private static int Run(string path, ComposerFileContent original)
     {
+        try
+        {
+            return RunSession(path, original);
+        }
+        finally
+        {
+            // The catalog's codex app-server child never outlives the CLI, whichever way it exits.
+            StopCodexChild();
+        }
+    }
+
+    [SupportedOSPlatform("windows")]
+    private static int RunSession(string path, ComposerFileContent original)
+    {
         var pipeName = "PopGuy-Composer-" + WindowsIdentity.GetCurrent().User!.Value;
 
         var pipe = TryConnect(pipeName);
@@ -71,12 +86,18 @@ internal static partial class Program
             {
                 return Fail("file is too large to send to PopGuy");
             }
-            if (!WriteAll(pipe, request))
+            if (!WriteLocked(pipe, request))
                 return Fail("PopGuy closed the connection");
+
+            // Best effort, in the background: the "/" or "$" catalog follows "open" unless a reply came first.
+            StartCatalogSender(pipe, path);
 
             // Keep the pipe fully open while the composer is up: the app treats EOF as "client gone".
             ComposerMessage reply;
-            switch (ReadReplyLine(pipe, out var line))
+            var status = ReadReplyLine(pipe, out var line);
+            lock (PipeLock)
+                _replied = true;
+            switch (status)
             {
                 case ReplyStatus.Closed:
                     return Fail("PopGuy closed the connection");
@@ -104,7 +125,7 @@ internal static partial class Program
                         return Fail($"{path}: {Describe(e)}");
                     }
                     // Best effort: without it the app keeps the draft and skips auto-submit.
-                    WriteAll(pipe, ComposerMessage.EncodeLine(new ComposerMessage.Written()));
+                    WriteLocked(pipe, ComposerMessage.EncodeLine(new ComposerMessage.Written()));
                     return 0;
                 case ComposerMessage.Cancel:
                     return Fail("cancelled");
@@ -136,8 +157,10 @@ internal static partial class Program
     /// <summary>One connection attempt (up to 200 ms) on a fresh pipe stream; null if nobody of this user listens.</summary>
     private static NamedPipeClientStream? TryConnect(string pipeName)
     {
-        // CurrentUserOnly refuses a pipe whose server runs as another user.
-        var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut, PipeOptions.CurrentUserOnly);
+        // CurrentUserOnly refuses a pipe whose server runs as another user. Asynchronous (overlapped) so the catalog
+        // write from the background is not serialized behind the blocking reply read.
+        var pipe = new NamedPipeClientStream(".", pipeName, PipeDirection.InOut,
+            PipeOptions.CurrentUserOnly | PipeOptions.Asynchronous);
         try
         {
             pipe.Connect(200);
@@ -196,6 +219,28 @@ internal static partial class Program
     [LibraryImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     private static partial bool AllowSetForegroundWindow(uint processId);
+
+    /// <summary>Guards every write on the pipe and <see cref="_replied"/>, so lines never interleave.</summary>
+    private static readonly Lock PipeLock = new();
+
+    /// <summary>Set once the app's reply has been read: no catalog is sent after it.</summary>
+    private static bool _replied;
+
+    private static bool WriteLocked(Stream pipe, byte[] data)
+    {
+        lock (PipeLock)
+            return WriteAll(pipe, data);
+    }
+
+    /// <summary>Writes the catalog line only while no reply has arrived.</summary>
+    private static void WriteCatalogIfNoReply(Stream pipe, byte[] data)
+    {
+        lock (PipeLock)
+        {
+            if (!_replied)
+                WriteAll(pipe, data);
+        }
+    }
 
     private static bool WriteAll(Stream pipe, byte[] data)
     {

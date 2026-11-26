@@ -5,7 +5,8 @@
 // same-user Unix domain socket (POSIX sockets), then blocks until the composer replies:
 // "done" writes the text back in place, tells the app "written" and exits 0; cancel, busy,
 // error or a closed connection exit 1 and leave the file untouched; a failed write exits 1
-// without "written". The text itself is never printed.
+// without "written". The text itself is never printed. While it waits, a background job
+// sends the calling agent's command catalog (AgentCatalogSender.swift).
 
 import AppKit
 import Foundation
@@ -14,6 +15,7 @@ import Foundation
 
 /// Prints one "popguy-edit: ..." line on stderr and exits.
 func fail(_ message: String, code: Int32 = 1) -> Never {
+    codexChildren.stopAll()
     FileHandle.standardError.write(Data("popguy-edit: \(message)\n".utf8))
     exit(code)
 }
@@ -184,10 +186,15 @@ do {
 } catch {
     fail("file is too large to send to PopGuy")
 }
-guard writeAll(fd, request) else { fail("PopGuy closed the connection") }
+let link = ComposerLink(fd: fd)
+guard link.write(request) else { fail("PopGuy closed the connection") }
+// The agent's command catalog follows from a background queue, unless a reply comes first.
+startCatalogJob(link: link, filePath: path)
 
 // Keep the socket fully open while the composer is up: the app treats EOF as "client gone".
-switch readReplyLine(fd) {
+let replyLine = readReplyLine(fd)
+link.markReplied()
+switch replyLine {
 case .closed:
     fail("PopGuy closed the connection")
 case .failed:
@@ -203,8 +210,9 @@ case .line(let line):
         }
         // Best effort: without it the app keeps the draft and skips auto-submit.
         if let ack = try? ComposerMessage.encodeLine(.written) {
-            _ = writeAll(fd, ack)
+            _ = link.write(ack)
         }
+        codexChildren.stopAll()
         close(fd)
         exit(0)
     case .cancel:
@@ -213,7 +221,7 @@ case .line(let line):
         fail("another composer is already open")
     case .error(let reason):
         fail(reason)
-    case .open, .written:
+    case .open, .catalog, .written:
         fail("invalid reply from PopGuy")
     }
 }
