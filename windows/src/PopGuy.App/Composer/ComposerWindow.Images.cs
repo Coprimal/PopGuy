@@ -277,6 +277,11 @@ public sealed partial class ComposerWindow
         var removeStroke = new SolidColorBrush(ThemeColor("ControlStrokeColorDefault", theme));
         for (var i = 0; i < _stripEntries.Count; i++) ImageStrip.Children.Add(BuildTile(i, _stripEntries[i], removeFill, removeStroke));
         ImageStripHost.Visibility = _stripEntries.Count > 0 ? Visibility.Visible : Visibility.Collapsed;
+        // Started once the tiles are in the strip, so a load that is already done still finds them.
+        var pending = _stripEntries.Select(entry => entry.LocalPath).OfType<string>()
+            .Where(path => !_thumbnails.ContainsKey(path) && !_failedThumbnails.Contains(path))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToArray();
+        foreach (var path in pending) _ = LoadTileThumbnailAsync(path);
     }
 
     /// <summary>
@@ -305,7 +310,6 @@ public sealed partial class ComposerWindow
             name = Path.GetFileName(path);
             if (_thumbnails.TryGetValue(path, out var cached)) main.Content = ThumbnailImage(cached, main, path);
             else main.Content = PictureIcon();
-            if (!_thumbnails.ContainsKey(path) && !_failedThumbnails.Contains(path)) _ = LoadTileThumbnailAsync(main, path);
             HoverTooltip.SetText(main, _failedThumbnails.Contains(path) ? CantPreview : name);
             AutomationProperties.SetName(main, $"Image {name}");
         }
@@ -367,18 +371,42 @@ public sealed partial class ComposerWindow
         return image;
     }
 
-    /// <summary>The thumbnail goes into its tile in place once loaded (the tile may be gone by then).</summary>
-    private async Task LoadTileThumbnailAsync(Button button, string path)
+    /// <summary>
+    /// Once loaded, the thumbnail goes in place into the strip's current tiles of <paramref name="path"/>, found by path:
+    /// the tiles may have been rebuilt meanwhile. A failure is marked only while a tile shows the path.
+    /// </summary>
+    private async Task LoadTileThumbnailAsync(string path)
     {
         var image = await LoadThumbnailAsync(path);
-        if (_closed || button.Parent is not Grid tile || !ReferenceEquals(tile.Parent, ImageStrip)) return;
+        if (_closed) return;
+        var buttons = TileButtons(path);
         if (image is null)
         {
+            if (buttons.Count == 0) return;
             _failedThumbnails.Add(path);
-            HoverTooltip.SetText(button, CantPreview);
+            foreach (var button in buttons) HoverTooltip.SetText(button, CantPreview);
             return;
         }
-        button.Content = ThumbnailImage(image, button, path);
+        foreach (var button in buttons)
+        {
+            if (button.Content is not Image) button.Content = ThumbnailImage(image, button, path);
+        }
+    }
+
+    /// <summary>The thumbnail buttons of the strip's tiles whose file is <paramref name="path"/>.</summary>
+    private List<Button> TileButtons(string path)
+    {
+        var buttons = new List<Button>();
+        foreach (var child in ImageStrip.Children)
+        {
+            if (child is Grid { Children.Count: > 0 } tile && tile.Children[0] is Button { Tag: int index } button
+                && index < _stripEntries.Count
+                && string.Equals(_stripEntries[index].LocalPath, path, StringComparison.OrdinalIgnoreCase))
+            {
+                buttons.Add(button);
+            }
+        }
+        return buttons;
     }
 
     /// <summary>
