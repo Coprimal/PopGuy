@@ -2,7 +2,8 @@
 // PopGuy
 //
 // SwiftUI content of the composer window: the text editor and a footer with the
-// source hint, "Restore draft", Cancel, Done and Done & Submit. When the terminal
+// source hint, "Restore draft", Cancel, Done and Done & Submit, with the image strip
+// above the footer and the enlarged image preview over everything. When the terminal
 // session has ended, or Compose has no target app, Done becomes "Copy & Close" and
 // Done & Submit is hidden.
 // The owner (the composer controller) holds the `ComposerModel` and its callbacks.
@@ -42,9 +43,18 @@ final class ComposerModel: ObservableObject {
     var onCopyAndClose: () -> Void = {}
     var onRestoreDraft: () -> Void = {}
 
+    /// Direct, undoable access to the editor (image strip selection, removal, lock).
+    let editor: ComposerEditorHandle
+    /// The image strip and its enlarged preview; follows `text`.
+    let images: ComposerImageStripModel
+
     init(text: String = "", sourceAppName: String? = nil) {
         self.text = text
         self.sourceAppName = sourceAppName
+        let editor = ComposerEditorHandle()
+        self.editor = editor
+        self.images = ComposerImageStripModel(editor: editor)
+        images.bind(text: $text.eraseToAnyPublisher())
     }
 
     /// Done copies the text instead of delivering it.
@@ -60,19 +70,47 @@ final class ComposerModel: ObservableObject {
 
 struct ComposerView: View {
     @ObservedObject var model: ComposerModel
+    /// Observed directly: changes inside the nested model do not re-render `model`'s views.
+    @ObservedObject private var images: ComposerImageStripModel
+
+    init(model: ComposerModel) {
+        _model = ObservedObject(wrappedValue: model)
+        _images = ObservedObject(wrappedValue: model.images)
+    }
 
     var body: some View {
-        VStack(spacing: 0) {
-            ComposerTextView(
-                text: $model.text,
-                onDone: done,
-                onDoneAndSubmit: doneAndSubmit,
-                onCancel: { model.onCancel() },
-                suggestionCatalog: model.suggestionCatalog
-            )
-            .frame(minWidth: 320, maxWidth: .infinity, minHeight: 140, maxHeight: .infinity)
-            Divider()
-            footer
+        let images = self.images
+        ZStack {
+            VStack(spacing: 0) {
+                ComposerTextView(
+                    text: $model.text,
+                    onDone: done,
+                    onDoneAndSubmit: doneAndSubmit,
+                    onCancel: { model.onCancel() },
+                    suggestionCatalog: model.suggestionCatalog,
+                    editor: model.editor,
+                    onEscapeOverride: {
+                        guard images.isPreviewOpen else { return false }
+                        images.closePreview()
+                        return true
+                    }
+                )
+                // A smaller editor while the strip shows, so the window's minimum size does not clip.
+                .frame(minWidth: 320, maxWidth: .infinity, minHeight: images.items.isEmpty ? 140 : 80,
+                       maxHeight: .infinity)
+                Divider()
+                if !images.items.isEmpty {
+                    ComposerImageStrip(model: images)
+                        .fixedSize(horizontal: false, vertical: true)
+                        // The strip insets its tiles by 10; 2 more aligns them with the footer's 12.
+                        .padding(.horizontal, 2)
+                        .padding(.top, 4)
+                }
+                footer
+            }
+            if images.preview != nil {
+                ComposerImagePreview(model: images)
+            }
         }
     }
 
@@ -166,6 +204,8 @@ struct ComposerView: View {
     /// Done, or Copy & Close once the session ended or without a Compose target.
     /// Ignored while the text is too large.
     private func done() {
+        // The preview closes first (it also unlocks the editor).
+        images.closePreview()
         if model.isCopyOnly {
             guard !model.text.isEmpty else { return }
             let pasteboard = NSPasteboard.general
@@ -182,6 +222,7 @@ struct ComposerView: View {
     }
 
     private func doneAndSubmit() {
+        images.closePreview()
         guard !model.isCopyOnly, !model.isTooLarge else {
             NSSound.beep()
             return

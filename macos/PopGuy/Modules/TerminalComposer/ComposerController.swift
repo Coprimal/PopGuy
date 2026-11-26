@@ -123,9 +123,15 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
     }
 
     /// `compose` is set for Compose mode: whether it has no target, and the target's name.
+    /// `showsClaudeImageTokens`: the image strip shows the CLI's "[Image #N]" chips.
     private func open(text: String, sourceAppName: String?, draftID: UUID,
-                      compose: (noTarget: Bool, targetName: String?)? = nil) {
+                      compose: (noTarget: Bool, targetName: String?)? = nil,
+                      showsClaudeImageTokens: Bool = false) {
+        resetImagePreview()
+        // Before the text, so the strip filters the new text with the new setting.
+        model.images.showsClaudeImageTokens = showsClaudeImageTokens
         model.text = text
+        model.images.update(text: text)
         model.sourceAppName = sourceAppName
         model.sessionEnded = false
         model.noTarget = compose?.noTarget ?? false
@@ -256,7 +262,15 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         state = .idle
         model.draftAvailable = false
         model.suggestionCatalog = nil
+        resetImagePreview()
         window.close()
+    }
+
+    /// The window and model are reused: no preview and an unlocked editor for the next open.
+    private func resetImagePreview() {
+        model.images.closePreview()
+        // closePreview() does nothing (no unlock) when no preview is open.
+        model.editor.setLocked(false)
     }
 
     // MARK: Auto-submit
@@ -303,7 +317,8 @@ final class ComposerController: NSObject, ComposerServerDelegate, NSWindowDelega
         let source = front?.processIdentifier == ProcessInfo.processInfo.processIdentifier ? nil : front
         let draftID = UUID()
         state = .cli(session: session, sourcePID: source?.processIdentifier, draftID: draftID)
-        open(text: text, sourceAppName: source?.localizedName, draftID: draftID)
+        open(text: text, sourceAppName: source?.localizedName, draftID: draftID,
+             showsClaudeImageTokens: fileName.hasPrefix("claude-prompt"))
     }
 
     func composerServer(_ server: ComposerServer, didReceiveCatalog agent: String,

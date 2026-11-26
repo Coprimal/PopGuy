@@ -539,6 +539,10 @@ final class ToolbarController {
             for await event in self.pipeline.events {
                 // Master kill switch: suppress every automatic trigger when off.
                 guard self.settings.popGuyEnabled else { continue }
+                // The composer's image strip selected a mention in PopGuy's own editor.
+                var pid: pid_t = 0
+                if AXUIElementGetPid(event.sourceElement.element, &pid) == .success, pid == getpid(),
+                   ComposerEditorHandle.isOwnSelection(event.text) { continue }
                 // Trigger gate: text-select path only — not the chord.
                 // Double-click trigger active (a double-click selects a single word):
                 // run its assigned default action directly — reusing the captured

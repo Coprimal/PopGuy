@@ -5,7 +5,8 @@
 // for SwiftUI. Soft wrap to the width, undo, find bar, plain text only (paste drops
 // formatting), no smart quotes/dashes or autocorrect (prompt and code text).
 //
-// Keys: Cmd+Return → onDone, Cmd+Shift+Return → onDoneAndSubmit, Esc → onCancel.
+// Keys: Cmd+Return → onDone, Cmd+Shift+Return → onDoneAndSubmit, Esc → onCancel
+// (unless onEscapeOverride consumes it first, e.g. to close an image preview).
 // In a CLI session with a command catalog, typing the agent's trigger shows the
 // suggestion list (CommandSuggestionPopup): while it is shown, Up/Down move its
 // selection, Return and Tab accept, and Esc closes only the list.
@@ -14,6 +15,9 @@
 // (ComposerImageStore).
 // Standard edit shortcuts (cut/copy/paste/undo/redo/select all/find) are handled
 // in the view itself, so they work whether or not the app's main menu has an Edit menu.
+// ComposerEditorHandle lets SwiftUI select or remove a range and lock the editor
+// through the text view itself, so undo history survives (setting the bound text
+// would replace the whole string and wipe it).
 //
 // Sizing: the caller gives it an explicit frame, e.g.
 // `.frame(minWidth:, maxWidth: .infinity, minHeight:, maxHeight: .infinity)`.
@@ -28,6 +32,10 @@ struct ComposerTextView: NSViewRepresentable {
     var onCancel: () -> Void = {}
     /// The CLI session's command catalog; nil shows no suggestions.
     var suggestionCatalog: ComposerSuggestionCatalog?
+    /// Gives the caller direct, undoable access to the text view.
+    var editor: ComposerEditorHandle? = nil
+    /// Checked first on Esc; returning true consumes it (nothing else happens).
+    var onEscapeOverride: (() -> Bool)? = nil
 
     static let baseFont = NSFont.systemFont(ofSize: NSFont.systemFontSize + 1)
 
@@ -106,6 +114,8 @@ struct ComposerTextView: NSViewRepresentable {
         textView.onDone = onDone
         textView.onDoneAndSubmit = onDoneAndSubmit
         textView.onCancel = onCancel
+        textView.onEscapeOverride = onEscapeOverride
+        editor?.textView = textView
     }
 
     final class Coordinator: NSObject, NSTextViewDelegate, NSTextStorageDelegate {
@@ -138,11 +148,72 @@ struct ComposerTextView: NSViewRepresentable {
     }
 }
 
+/// Edits and selects through the AppKit text view itself, so the change is undoable and
+/// reaches the SwiftUI binding through the text view delegate like a typed edit.
+@MainActor
+final class ComposerEditorHandle {
+    weak var textView: ComposerNSTextView?
+
+    var currentText: String { textView?.string ?? "" }
+
+    /// Locked: the text stays selectable but cannot be edited (also not by undo/redo).
+    var isLocked: Bool { textView.map { !$0.isEditable } ?? false }
+
+    private static var lastSelection: (text: String, time: ContinuousClock.Instant)?
+
+    /// True for the selection `select` just made (same text, within a second): the
+    /// floating toolbar skips it, or it would cover the preview and take its Esc.
+    static func isOwnSelection(_ text: String) -> Bool {
+        guard let last = lastSelection, last.text == text else { return false }
+        return ContinuousClock.now - last.time < .seconds(1)
+    }
+
+    /// Selects `range`, scrolls it into view and focuses the editor; an invalid range does nothing.
+    func select(_ range: NSRange) {
+        guard let textView, Self.isValid(range, in: textView) else { return }
+        Self.lastSelection = ((textView.string as NSString).substring(with: range), .now)
+        textView.setSelectedRange(range)
+        textView.scrollRangeToVisible(range)
+        textView.window?.makeFirstResponder(textView)
+    }
+
+    /// Deletes `range` as one undoable "Remove Image" edit, caret at its start.
+    /// Does nothing while locked, during IME composition, or for an invalid or empty range.
+    func remove(_ range: NSRange) {
+        guard let textView, textView.isEditable, !textView.hasMarkedText(), range.length > 0,
+              Self.isValid(range, in: textView) else { return }
+        textView.breakUndoCoalescing()
+        guard textView.shouldChangeText(in: range, replacementString: ""),
+              let storage = textView.textStorage else { return }
+        storage.replaceCharacters(in: range, with: "")
+        textView.didChangeText()
+        textView.undoManager?.setActionName("Remove Image")
+        let caret = NSRange(location: range.location, length: 0)
+        textView.setSelectedRange(caret)
+        textView.scrollRangeToVisible(caret)
+        textView.window?.makeFirstResponder(textView)
+    }
+
+    /// Locks or unlocks editing; locking also closes the command suggestion list.
+    func setLocked(_ locked: Bool) {
+        guard let textView else { return }
+        textView.isEditable = !locked
+        if locked { textView.suggestions.hide() }
+    }
+
+    private static func isValid(_ range: NSRange, in textView: NSTextView) -> Bool {
+        let length = (textView.string as NSString).length
+        return range.location != NSNotFound && range.location <= length && range.length <= length - range.location
+    }
+}
+
 /// Text view subclass with the composer's key handling.
 final class ComposerNSTextView: NSTextView {
     var onDone: () -> Void = {}
     var onDoneAndSubmit: () -> Void = {}
     var onCancel: () -> Void = {}
+    /// Checked first on Esc; returning true consumes it.
+    var onEscapeOverride: (() -> Bool)?
 
     /// The command suggestion list of this editor.
     private(set) lazy var suggestions = CommandSuggestionPopup(textView: self)
@@ -177,8 +248,10 @@ final class ComposerNSTextView: NSTextView {
         return resigned
     }
 
-    /// Esc closes the suggestion list, else cancels (NSTextView would otherwise start completion).
+    /// Esc goes to onEscapeOverride first, then closes the suggestion list, else cancels
+    /// (NSTextView would otherwise start completion).
     override func cancelOperation(_ sender: Any?) {
+        if onEscapeOverride?() == true { return }
         if suggestions.isVisible {
             suggestions.hide()
             return
@@ -234,7 +307,7 @@ final class ComposerNSTextView: NSTextView {
 
     /// An image (or copied image files) pastes as "@path" mentions; anything else as plain text.
     override func paste(_ sender: Any?) {
-        guard !hasMarkedText(), let paths = ComposerImageStore.standard?.imagePaths(from: .general) else {
+        guard isEditable, !hasMarkedText(), let paths = ComposerImageStore.standard?.imagePaths(from: .general) else {
             super.paste(sender)
             return
         }
@@ -248,7 +321,7 @@ final class ComposerNSTextView: NSTextView {
     /// Applies the list edit for a single caret (no selection, no IME composition) as one undoable edit.
     private func applyListEdit(_ makeEdit: (String, Int) -> ListContinuation.Edit?) -> Bool {
         let selection = selectedRange()
-        guard !hasMarkedText(), selectedRanges.count == 1, selection.length == 0,
+        guard isEditable, !hasMarkedText(), selectedRanges.count == 1, selection.length == 0,
               let edit = makeEdit(string, selection.location) else { return false }
         insertText(edit.replacement, replacementRange: edit.range)
         return true
@@ -284,10 +357,11 @@ final class ComposerNSTextView: NSTextView {
         case ("a", [.command]):
             return NSApp.sendAction(#selector(NSText.selectAll(_:)), to: nil, from: nil)
         case ("z", [.command]) where isFocused:
-            if undoManager?.canUndo == true { undoManager?.undo() }
+            // Locked (not editable): swallow, so undo cannot change the text.
+            if isEditable, undoManager?.canUndo == true { undoManager?.undo() }
             return true
         case ("z", [.command, .shift]) where isFocused:
-            if undoManager?.canRedo == true { undoManager?.redo() }
+            if isEditable, undoManager?.canRedo == true { undoManager?.redo() }
             return true
         case ("f", [.command]) where isFocused:
             let item = NSMenuItem()
